@@ -8,7 +8,7 @@ import java.io.{File, FileWriter, IOException}
 object BootPlugin extends sbt.AutoPlugin {
 
   private val fileName = "dependencies"
-  private val inlcuded = Set("provided", "compile", "runtime")
+  private val inlcuded = Set("provided", "compile-internal", "runtime-internal")
 
   object autoImport {
     val bootDependencies = taskKey[Unit]("Generate boot dependencies file")
@@ -19,49 +19,56 @@ object BootPlugin extends sbt.AutoPlugin {
 
   import autoImport._
 
+  override def requires: Plugins = {
+    plugins.IvyPlugin
+  }
+
   override lazy val projectSettings = inConfig(Compile)(baseBootSettings)
 
   override def trigger = allRequirements
 
   lazy val generateDependenciesTask =
     Def.task {
-      val s = libraryDependencies.value
-      generate(crossTarget.value.getAbsolutePath, s,scalaBinaryVersion.value, streams.value.log)
+      val classpaths = new collection.mutable.ArrayBuffer[Attributed[File]]
+      classpaths ++= (Compile / externalDependencyClasspath).value
+      classpaths ++= (Runtime / externalDependencyClasspath).value
+      generate(crossTarget.value.getAbsolutePath, classpaths, scalaBinaryVersion.value, streams.value.log)
     }
 
-  def generate(target: String, dependencies: Seq[ModuleID],scalaBinaryVersion:String, log: util.Logger): Unit = {
+  def generate(target: String, dependencies: collection.Seq[Attributed[File]], scalaBinaryVersion: String, log: util.Logger): Unit = {
     val folder = target + "/classes/META-INF/beangle"
     new File(folder).mkdirs()
     val file = new File(folder + "/" + fileName)
     file.delete()
     try {
       file.createNewFile()
-      val provideds = new collection.mutable.ArrayBuffer[String]
-      dependencies foreach { m =>
-        val scope = m.configurations.getOrElse("compile")
-        if (inlcuded.contains(scope)) {
-          val artifactName = {
-            m.crossVersion match {
-              case sbt.librarymanagement.Disabled => m.name
-              case _:sbt.librarymanagement.Binary => m.name + "_" + scalaBinaryVersion
-              case _=> m.name
+      val results = new collection.mutable.HashSet[String]
+      dependencies foreach { d =>
+        d.get(Keys.moduleID.key) match {
+          case Some(m) =>
+            println(m)
+            val scope = m.configurations.getOrElse("compile")
+            if ("test" != scope) {
+              val artifactName = {
+                m.crossVersion match {
+                  case sbt.librarymanagement.Disabled => m.name
+                  case _: sbt.librarymanagement.Binary => m.name + "_" + scalaBinaryVersion
+                  case _ => m.name
+                }
+              }
+              val gav = s"${m.organization}:${artifactName}:${m.revision}"
+              results += gav
             }
-          }
-          provideds.append(s"${m.organization}:${artifactName}:${m.revision}")
+          case _ =>
         }
       }
-      val sb = new StringBuilder()
-      if (provideds.contains("org.scala-lang:scala3-library_3:3.0.1") && !provideds.contains("org.scala-lang:scala-library:2.13.6")) {
-        provideds += "org.scala-lang:scala-library:2.13.6"
-      }
-      provideds.sorted foreach { one =>
-        sb.append(one).append('\n')
-      }
       val fw = new FileWriter(file)
-      fw.write(sb.toString)
+      fw.write(results.toSeq.sorted.mkString("\n"))
       fw.close()
-      log.info(s"Generated dependencies:(${provideds.size})" + file.getAbsolutePath)
-    } catch {
+      log.info(s"Generated dependencies:(${results.size})" + file.getAbsolutePath)
+    }
+
+    catch {
       case e: IOException => e.printStackTrace()
     }
   }
