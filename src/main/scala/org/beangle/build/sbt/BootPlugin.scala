@@ -1,8 +1,9 @@
 package org.beangle.build.sbt
 
-import java.io.{File, FileWriter, IOException}
 import sbt.Keys._
 import sbt._
+
+import java.io.{File, FileWriter, IOException}
 
 object BootPlugin extends sbt.AutoPlugin {
 
@@ -25,10 +26,10 @@ object BootPlugin extends sbt.AutoPlugin {
   lazy val generateDependenciesTask =
     Def.task {
       val s = libraryDependencies.value
-      generate(crossTarget.value.getAbsolutePath, s, streams.value.log)
+      generate(crossTarget.value.getAbsolutePath, s,scalaBinaryVersion.value, streams.value.log)
     }
 
-  def generate(target: String, dependencies: Seq[ModuleID], log: util.Logger): Unit = {
+  def generate(target: String, dependencies: Seq[ModuleID],scalaBinaryVersion:String, log: util.Logger): Unit = {
     val folder = target + "/classes/META-INF/beangle"
     new File(folder).mkdirs()
     val file = new File(folder + "/" + fileName)
@@ -39,7 +40,14 @@ object BootPlugin extends sbt.AutoPlugin {
       dependencies foreach { m =>
         val scope = m.configurations.getOrElse("compile")
         if (inlcuded.contains(scope)) {
-          provideds.append(s"${m.organization}:${m.name}:${m.revision}")
+          val artifactName = {
+            m.crossVersion match {
+              case sbt.librarymanagement.Disabled => m.name
+              case _:sbt.librarymanagement.Binary => m.name + "_" + scalaBinaryVersion
+              case _=> m.name
+            }
+          }
+          provideds.append(s"${m.organization}:${artifactName}:${m.revision}")
         }
       }
       val sb = new StringBuilder()
