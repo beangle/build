@@ -8,7 +8,6 @@ import java.io.{File, FileWriter, IOException}
 object BootPlugin extends sbt.AutoPlugin {
 
   private val fileName = "dependencies"
-  private val inlcuded = Set("provided", "compile-internal", "runtime-internal")
 
   object autoImport {
     val bootDependencies = taskKey[Unit]("Generate boot dependencies file")
@@ -32,6 +31,7 @@ object BootPlugin extends sbt.AutoPlugin {
       val classpaths = new collection.mutable.ArrayBuffer[Attributed[File]]
       classpaths ++= (Compile / externalDependencyClasspath).value
       classpaths ++= (Runtime / externalDependencyClasspath).value
+      classpaths ++= (Compile / internalDependencyClasspath).value
       generate(crossTarget.value.getAbsolutePath, classpaths, scalaBinaryVersion.value, streams.value.log)
     }
 
@@ -46,7 +46,6 @@ object BootPlugin extends sbt.AutoPlugin {
       dependencies foreach { d =>
         d.get(Keys.moduleID.key) match {
           case Some(m) =>
-            println(m)
             val scope = m.configurations.getOrElse("compile")
             if ("test" != scope) {
               val artifactName = {
@@ -65,10 +64,8 @@ object BootPlugin extends sbt.AutoPlugin {
       val fw = new FileWriter(file)
       fw.write(results.toSeq.sorted.mkString("\n"))
       fw.close()
-      log.info(s"Generated dependencies:(${results.size})" + file.getAbsolutePath)
-    }
-
-    catch {
+      log.info(s"Generated dependencies:(${results.size}) at " + file.getAbsolutePath)
+    } catch {
       case e: IOException => e.printStackTrace()
     }
   }
