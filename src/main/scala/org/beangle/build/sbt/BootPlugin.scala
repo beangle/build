@@ -47,7 +47,7 @@ object BootPlugin extends sbt.AutoPlugin {
         d.get(Keys.moduleID.key) match {
           case Some(m) =>
             val scope = m.configurations.getOrElse("compile")
-            if ("test" != scope) {
+            if ("test" != scope && !m.revision.contains("SNAPSHOT")) {
               val artifactName = {
                 m.crossVersion match {
                   case sbt.librarymanagement.Disabled => m.name
