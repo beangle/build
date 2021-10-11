@@ -1,7 +1,7 @@
 import BuildSettings._
 import sbt._
 
-ThisBuild / version := "0.0.1"
+ThisBuild / version := "0.0.2"
 ThisBuild / description := "Beangle Build Tools."
 ThisBuild / organization := "org.beangle.build"
 ThisBuild / homepage := Some(url("https://github.com/beangle/build"))
@@ -28,8 +28,23 @@ ThisBuild / publishTo := {
 }
 
 lazy val root = (project in file("."))
-  .enablePlugins(SbtPlugin)
   .settings(
-    name := "sbt-build",
+    name := "beangle-build",
     commonSettings
   )
+  .aggregate(core, sbtplugin)
+
+lazy val core = (project in file("core"))
+  .settings(
+    name := "beangle-build-core",
+    commonSettings
+  )
+
+lazy val sbtplugin = (project in file("sbt"))
+  .enablePlugins(SbtPlugin)
+  .settings(
+    name := "sbt-beangle-build",
+    commonSettings
+  ).dependsOn(core)
+
+publish / skip := true

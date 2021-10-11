@@ -1,6 +1,4 @@
 /*
- * Beangle, Agile Development Scaffold and Toolkits.
- *
  * Copyright © 2005, The Beangle Software.
  *
  * This program is free software: you can redistribute it and/or modify
@@ -16,11 +14,10 @@
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-package org.beangle.build.sbt
 
-class Dependency(val groupId: String, val artifactId: String) {
+package org.beangle.build.util
 
-  def matches(other: Dependency): Boolean = {
-    (groupId == "*" || groupId == other.groupId) && (artifactId == "*" || artifactId == other.artifactId)
-  }
+object EOF {
+  val LF = "\n"
+  val CRLF = "\r\n"
 }
