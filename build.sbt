@@ -28,8 +28,23 @@ ThisBuild / publishTo := {
 }
 
 lazy val root = (project in file("."))
-  .enablePlugins(SbtPlugin)
   .settings(
-    name := "sbt-build",
+    name := "beangle-build",
     commonSettings
   )
+  .aggregate(core, plugin)
+
+lazy val core = (project in file("core"))
+  .settings(
+    name := "beangle-build-core",
+    commonSettings
+  )
+
+lazy val plugin = (project in file("plugin"))
+  .enablePlugins(SbtPlugin)
+  .settings(
+    name := "sbt-beangle-build",
+    commonSettings
+  ).dependsOn(core)
+
+publish / skip := true
