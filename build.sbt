@@ -32,7 +32,7 @@ lazy val root = (project in file("."))
     name := "beangle-build",
     commonSettings
   )
-  .aggregate(core, plugin)
+  .aggregate(core, sbtplugin)
 
 lazy val core = (project in file("core"))
   .settings(
@@ -40,7 +40,7 @@ lazy val core = (project in file("core"))
     commonSettings
   )
 
-lazy val plugin = (project in file("plugin"))
+lazy val sbtplugin = (project in file("sbt"))
   .enablePlugins(SbtPlugin)
   .settings(
     name := "sbt-beangle-build",
