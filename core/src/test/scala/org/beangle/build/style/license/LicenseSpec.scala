@@ -15,27 +15,21 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-package org.beangle.style.license
+package org.beangle.build.style.license
 
-import org.beangle.style.Style
-import org.beangle.style.ws.WsOptions
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
 
-import java.io.File
-
-class StyleSpec extends AnyWordSpec with Matchers {
+class LicenseSpec extends AnyWordSpec with Matchers {
 
   "Licenses" should {
-    "format style" in {
-      val licenses = Licenses(this.getClass.getResourceAsStream("/org/beangle/style/license/sample.md"))
+    "loadTemplate" in {
+      val licenses = Licenses(this.getClass.getResourceAsStream("/org/beangle/build/style/license/sample.md"))
       val license = licenses.get("LGPL-3.0")
       license.get.header shouldBe ("LGPL-3.0-or-later\nCopyright (C) ${year}, ${owner}.")
 
-      val l = licenses.header("LGPL-3.0", "2005-2020", "Beangle")
-      val lo = LicenseOptions(l, false)
-      val wo = WsOptions(true, 2, true, true, true)
-      Style.format(new File("E:\\workspace\\beangle\\style\\core\\src\\test\\resources\\org\\beangle\\style\\license\\Sample.scala"), None, wo, lo)
+      val l = licenses.header("GNU Lesser General Public License version 3", "2005-2020", "Beangle")
+      l shouldBe ("LGPL-3.0-or-later\nCopyright (C) 2005-2020, Beangle.")
     }
   }
 }
