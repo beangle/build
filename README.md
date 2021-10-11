@@ -1,7 +1,6 @@
-# style plugin
+# Beangle Build Tools
 
-
-## plugin声明
+## 引入 sbt plugin
   使用sbt构建时，在project/plugins.sbt中添加
 
     addSbtPlugin("org.beangle.build" % "sbt-beangle-build" % "0.0.2")
