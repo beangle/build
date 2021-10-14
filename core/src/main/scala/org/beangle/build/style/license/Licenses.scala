@@ -55,7 +55,7 @@ object Licenses {
     if (!copied) copied = copy(new File(baseDirectory + "/LICENSE.txt"), targetDir)
     if (!copied) {
       repo.get(licenseName) foreach { l =>
-        val li = this.getClass.getResourceAsStream(s"/org/beangle/style/license/${l.shortName}.txt")
+        val li = this.getClass.getResourceAsStream(s"/org/beangle/build/style/license/${l.shortName}.txt")
         if (null != li) copied = copy(li, targetDir)
       }
     }

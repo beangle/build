@@ -27,6 +27,8 @@ ThisBuild / publishTo := {
   else Some("releases" at nexus + "service/local/staging/deploy/maven2")
 }
 
+val apache_commons_compress = "org.apache.commons" % "commons-compress" % "1.21"
+
 lazy val root = (project in file("."))
   .settings(
     name := "beangle-build",
@@ -37,7 +39,8 @@ lazy val root = (project in file("."))
 lazy val core = (project in file("core"))
   .settings(
     name := "beangle-build-core",
-    commonSettings
+    commonSettings,
+    libraryDependencies ++= Seq(apache_commons_compress)
   )
 
 lazy val sbtplugin = (project in file("sbt"))
