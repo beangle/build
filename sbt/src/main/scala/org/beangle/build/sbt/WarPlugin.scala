@@ -17,10 +17,14 @@
 
 package org.beangle.build.sbt
 
+import org.beangle.build.sbt.OrmPlugin.autoImport.ormDdlDiff
+import org.beangle.build.sbt.OrmPlugin.diff
+import org.beangle.build.util.IOs
 import sbt.Def.taskKey
 import sbt.Keys._
 import sbt._
 
+import java.io.FileOutputStream
 import java.util.jar.Manifest
 
 object WarPlugin extends AutoPlugin {
@@ -28,9 +32,9 @@ object WarPlugin extends AutoPlugin {
   import Keys.{`package` => pkg}
 
   object autoImport {
-    lazy val webappPrepare = taskKey[Seq[(File, String)]](
-      "prepare webapp contents for packaging"
-    )
+    lazy val webappPrepare = taskKey[Seq[(File, String)]]("prepare webapp contents for packaging")
+    val warAddDefaultWebxml = settingKey[Boolean]("add default web.xml when nessesary")
+    var warDiff = inputKey[Unit]("Generate war diff")
   }
 
   import autoImport._
@@ -54,7 +58,19 @@ object WarPlugin extends AutoPlugin {
       Seq(
         (webappPrepare / sourceDirectory) := (Compile / sourceDirectory).value / "webapp",
         (webappPrepare / target) := (Compile / target).value / "webapp",
-        webappPrepare := webappPrepareTask.value
+        webappPrepare := webappPrepareTask.value,
+        warAddDefaultWebxml := true ) ++
+      Seq(
+        warDiff := {
+          import complete.DefaultParsers._
+          val args = spaceDelimited("<arg>").parsed
+          val log = streams.value.log
+          if (args.size < 2) {
+            log.error("usage:warDiff oldVersion newVersion")
+          } else {
+            println(args)
+          }
+        }
       )
   }
 
@@ -76,11 +92,28 @@ object WarPlugin extends AutoPlugin {
       webappTarget.value
     }
 
+  private def prepareWebxml(webappSrcDir: File, log: util.Logger): Unit = {
+    val buildWebInf = s"${webappSrcDir.getAbsolutePath}/WEB-INF/"
+    val webxml = new File(buildWebInf + "/web.xml")
+    new File(buildWebInf).mkdirs()
+    if (!webxml.exists()) {
+      val os = new FileOutputStream(webxml)
+      IOs.copy(getClass.getResourceAsStream("/org/beangle/build/web/web.xml"), os)
+      IOs.close(os)
+      log.info(s"Add default web.xml ${webxml.getAbsolutePath}")
+    }
+  }
+
   private def webappPrepareTask =
     Def.task {
       val taskStreams = streams.value
       val webappTarget = _webappPrepare(webappPrepare / target, "webapp").value
+
+      // generate default web.xml and dependencies file
+      val log = streams.value.log
+      if (warAddDefaultWebxml.value) prepareWebxml(webappTarget, log)
       BootPlugin.generateDependenciesTask.value
+
       val m = (Compile / packageBin / mappings).value
       val webInfDir = webappTarget / "WEB-INF"
       val webappLibDir = webInfDir / "lib"
@@ -89,17 +122,9 @@ object WarPlugin extends AutoPlugin {
       Util.cacheify(
         "classes",
         { in =>
-          m find { case (src, dest) =>
-            src == in
-          } map { case (src, dest) =>
-            webInfDir / "classes" / dest
-          }
+          m find (_._1 == in) map (webInfDir / "classes" / _._2)
         },
-        (m filter { case (src, dest) =>
-          !src.isDirectory
-        } map { case (src, dest) =>
-          src
-        }).toSet,
+        (m filter (!_._1.isDirectory) map (_._1)).toSet,
         taskStreams
       )
 

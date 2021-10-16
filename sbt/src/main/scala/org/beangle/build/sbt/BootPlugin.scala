@@ -61,7 +61,7 @@ object BootPlugin extends sbt.AutoPlugin {
       val log = streams.value.log
       assemble(base, bootClasspathsTask.value, log)
       if (isRoot) {
-        log.info(s"Project reposistory is generated at ${base}")
+        log.info(s"Project reposistory is generated in ${base}")
       }
     }
 
