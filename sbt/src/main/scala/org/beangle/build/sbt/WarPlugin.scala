@@ -17,8 +17,7 @@
 
 package org.beangle.build.sbt
 
-import org.beangle.build.boot.Dependency
-import org.beangle.build.util.{Bsdiff, Files, IOs}
+import org.beangle.build.util.IOs
 import sbt.Def.taskKey
 import sbt.Keys._
 import sbt._
