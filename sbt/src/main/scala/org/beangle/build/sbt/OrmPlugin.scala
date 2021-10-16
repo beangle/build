@@ -37,7 +37,8 @@ object OrmPlugin extends sbt.AutoPlugin {
         if (args.size < 2) {
           log.error("usage:ormDdlDiff oldVersion newVersion")
         } else {
-          diff(baseDirectory.value, crossTarget.value, BootPlugin.bootClasspathsTask.value, "PostgreSQL".toLowerCase(), args(0), args(1), log)
+          diff(baseDirectory.value, crossTarget.value, BootPlugin.bootClasspathsTask.value,
+            "PostgreSQL".toLowerCase(), args(0), args(1), log)
         }
       }
     )
@@ -78,7 +79,8 @@ object OrmPlugin extends sbt.AutoPlugin {
   }
 
 
-  def diff(base: File, targetBase: File, dependencies: collection.Seq[Attributed[File]], dialect: String, oldVersion: String, newVersion: String, log: util.Logger): Unit = {
+  def diff(base: File, targetBase: File, dependencies: collection.Seq[Attributed[File]], dialect: String,
+           oldVersion: String, newVersion: String, log: util.Logger): Unit = {
     val folder = new File(targetBase.getAbsolutePath + "/../db/" + dialect + "/migrate")
     folder.mkdirs()
     try {

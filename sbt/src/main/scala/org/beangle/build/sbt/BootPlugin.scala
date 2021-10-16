@@ -17,8 +17,8 @@
 
 package org.beangle.build.sbt
 
+import org.beangle.build.boot.Dependency
 import org.beangle.build.util.Files
-import org.beangle.build.util.Files./
 import sbt.Keys._
 import sbt.{File, _}
 
@@ -50,7 +50,7 @@ object BootPlugin extends sbt.AutoPlugin {
 
   lazy val generateDependenciesTask =
     Def.task {
-      generate(crossTarget.value.getAbsolutePath, bootClasspathsTask.value, streams.value.log)
+      generate(crossTarget.value.getAbsolutePath, bootClasspathsTask.value, scalaBinaryVersion.value, streams.value.log)
     }
 
   lazy val assembleDependenciesTask =
@@ -59,7 +59,7 @@ object BootPlugin extends sbt.AutoPlugin {
       val base = new File(build.root) / "target/repository"
       val isRoot = build.root == baseDirectory.value.toURI
       val log = streams.value.log
-      assemble(base, bootClasspathsTask.value, log)
+      assemble(base, bootClasspathsTask.value, scalaBinaryVersion.value, log)
       if (isRoot) {
         log.info(s"Project reposistory is generated in ${base}")
       }
@@ -75,7 +75,7 @@ object BootPlugin extends sbt.AutoPlugin {
     }
   }
 
-  private def generate(target: String, dependencies: collection.Seq[Attributed[File]], log: util.Logger): Unit = {
+  private def generate(target: String, dependencies: collection.Seq[Attributed[File]], sbv: String, log: util.Logger): Unit = {
     val folder = target + "/classes/META-INF/beangle"
     new File(folder).mkdirs()
     val file = new File(folder + "/" + fileName)
@@ -88,7 +88,7 @@ object BootPlugin extends sbt.AutoPlugin {
           case Some(m) =>
             val scope = m.configurations.getOrElse("compile")
             if ("test" != scope && !m.revision.contains("SNAPSHOT")) {
-              results += toGav(m)
+              results += toGav(m, sbv)
             }
           case _ =>
         }
@@ -108,7 +108,7 @@ object BootPlugin extends sbt.AutoPlugin {
    * @param dependencies
    * @param log
    */
-  private def assemble(projectRepoDir: File, dependencies: collection.Seq[Attributed[File]], log: util.Logger): Unit = {
+  private def assemble(projectRepoDir: File, dependencies: collection.Seq[Attributed[File]], sbv: String, log: util.Logger): Unit = {
     projectRepoDir.mkdirs()
     val artifacts = new collection.mutable.ArrayBuffer[Attributed[File]]
     dependencies foreach { d =>
@@ -119,19 +119,19 @@ object BootPlugin extends sbt.AutoPlugin {
         case _ =>
       }
     }
-    copy(artifacts, projectRepoDir, log)
+    copy(artifacts, projectRepoDir, sbv, log)
   }
 
-  private def copy(artifacts: collection.Seq[Attributed[File]], base: File, log: util.Logger): Unit = {
+  private def copy(artifacts: collection.Seq[Attributed[File]], base: File, sbv: String, log: util.Logger): Unit = {
     artifacts foreach { artifact =>
-      toMavenRepoPath(artifact) foreach { path =>
-        val dest = new File(base.getAbsolutePath + / + path)
-        val destSha1 = new File(base.getAbsolutePath + / + path + ".sha1")
+      toMavenRepoPath(base.getAbsolutePath, artifact, sbv) foreach { path =>
+        val dest = new File(path)
+        val destSha1 = new File(path + ".sha1")
         if (!dest.exists()) Files.copy(artifact.data, dest)
         if (!destSha1.exists()) {
           val sha1File = new File(artifact.data.getAbsolutePath + ".sha1")
           if (sha1File.exists()) {
-            Files.copy(sha1File, new File(base.getAbsolutePath + / + path + ".sha1"))
+            Files.copy(sha1File, new File(path + ".sha1"))
           } else {
             log.warn(s"Missing sha1 for $path")
           }
@@ -140,23 +140,21 @@ object BootPlugin extends sbt.AutoPlugin {
     }
   }
 
-  private def toGav(m: sbt.librarymanagement.ModuleID): String = {
-    s"${m.organization}:${artifactName(m)}:${m.revision}"
+  private def toGav(m: sbt.librarymanagement.ModuleID, sbv: String): String = {
+    s"${m.organization}:${artifactName(m, sbv)}:${m.revision}"
   }
 
-  private def artifactName(m: sbt.librarymanagement.ModuleID): String = {
+  private def artifactName(m: sbt.librarymanagement.ModuleID, sbv: String): String = {
     m.crossVersion match {
       case sbt.librarymanagement.Disabled => m.name
-      case _: sbt.librarymanagement.Binary => m.name + "_" + scalaBinaryVersion
+      case _: sbt.librarymanagement.Binary => m.name + "_" + sbv
       case _ => m.name
     }
   }
 
-  private def toMavenRepoPath(d: Attributed[File]): Option[String] = {
+  private def toMavenRepoPath(base: String, d: Attributed[File], sbv: String): Option[String] = {
     d.get(Keys.moduleID.key) match {
-      case Some(m) =>
-        val aname = artifactName(m)
-        Some(s"${m.organization.replace('.', '/')}/${aname}/${m.revision}/${aname}-${m.revision}.jar")
+      case Some(m) => Some(Dependency.m2Path(base, m.organization, artifactName(m, sbv), m.revision))
       case _ => None
     }
   }

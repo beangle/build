@@ -17,14 +17,13 @@
 
 package org.beangle.build.sbt
 
-import org.beangle.build.sbt.OrmPlugin.autoImport.ormDdlDiff
-import org.beangle.build.sbt.OrmPlugin.diff
-import org.beangle.build.util.IOs
+import org.beangle.build.boot.Dependency
+import org.beangle.build.util.{Bsdiff, Files, IOs}
 import sbt.Def.taskKey
 import sbt.Keys._
 import sbt._
 
-import java.io.FileOutputStream
+import java.io.{File, FileOutputStream}
 import java.util.jar.Manifest
 
 object WarPlugin extends AutoPlugin {
@@ -34,7 +33,6 @@ object WarPlugin extends AutoPlugin {
   object autoImport {
     lazy val webappPrepare = taskKey[Seq[(File, String)]]("prepare webapp contents for packaging")
     val warAddDefaultWebxml = settingKey[Boolean]("add default web.xml when nessesary")
-    var warDiff = inputKey[Unit]("Generate war diff")
   }
 
   import autoImport._
@@ -45,7 +43,7 @@ object WarPlugin extends AutoPlugin {
     Def.task {
       val opt = (packageBin / packageOptions).value
       opt.filter {
-        case x: Package.ManifestAttributes => true
+        case _: Package.ManifestAttributes => true
         case _ => false
       }
     }
@@ -59,18 +57,7 @@ object WarPlugin extends AutoPlugin {
         (webappPrepare / sourceDirectory) := (Compile / sourceDirectory).value / "webapp",
         (webappPrepare / target) := (Compile / target).value / "webapp",
         webappPrepare := webappPrepareTask.value,
-        warAddDefaultWebxml := true ) ++
-      Seq(
-        warDiff := {
-          import complete.DefaultParsers._
-          val args = spaceDelimited("<arg>").parsed
-          val log = streams.value.log
-          if (args.size < 2) {
-            log.error("usage:warDiff oldVersion newVersion")
-          } else {
-            println(args)
-          }
-        }
+        warAddDefaultWebxml := true
       )
   }
 
