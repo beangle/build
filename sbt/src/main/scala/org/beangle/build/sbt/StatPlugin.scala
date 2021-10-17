@@ -29,7 +29,7 @@ object StatPlugin extends sbt.AutoPlugin {
   object autoImport {
     val statSloc = taskKey[Unit]("Stat line of code")
 
-    lazy val baseStyleSettings: Seq[Def.Setting[_]] = Seq(
+    lazy val baseStatSettings: Seq[Def.Setting[_]] = Seq(
       statSloc := statSlocTask.value
     )
   }
@@ -40,14 +40,14 @@ object StatPlugin extends sbt.AutoPlugin {
 
   // a group of settings that are automatically added to projects.
   override val projectSettings =
-    inConfig(Compile)(baseStyleSettings) ++
-      inConfig(Test)(baseStyleSettings)
+    inConfig(Compile)(baseStatSettings) ++
+      inConfig(Test)(baseStatSettings)
 
   lazy val statSlocTask =
     Def.task {
       val log = streams.value.log
       val stats = new mutable.HashMap[String, Int]
-      log.info("stating sloc in " + baseDirectory.value)
+      log.debug("stating sloc in " + baseDirectory.value)
       SlocStat.countDir(baseDirectory.value, stats, Set("target"))
       var sum = 0
       val rs = stats.toList.sortBy(_._2).reverse

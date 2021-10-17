@@ -16,7 +16,32 @@
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+
 package org.beangle.build.boot
+
+import java.io.File
+
+object Dependency {
+
+  def m2Path(m2Root: String, group: String, artifactName: String, version: String, packaging: String = ".jar"): String = {
+    val m2Base = new File(if (m2Root.startsWith("file:")) m2Root.substring("file:".length) else m2Root).getCanonicalPath
+    if (File.separatorChar == '/') {
+      s"${m2Base}/${group.replace('.', '/')}/${artifactName}/${version}/${artifactName}-${version}${packaging}"
+    } else {
+      s"${m2Base}\\${group.replace('.', '\\')}\\${artifactName}\\${version}\\${artifactName}-${version}${packaging}"
+    }
+  }
+
+  def m2DiffPath(m2Root: String, group: String, artifactName: String, oldVersion: String, newVersion: String, packaging: String = ".jar"): String = {
+    val m2Base = new File(if (m2Root.startsWith("file:")) m2Root.substring("file:".length) else m2Root).getCanonicalPath
+    if (File.separatorChar == '/') {
+      s"${m2Base}/${group.replace('.', '/')}/${artifactName}/${newVersion}/${artifactName}-${oldVersion}_${newVersion}${packaging}.diff"
+    } else {
+      s"${m2Base}/${group.replace('.', '\\')}/${artifactName}\\${newVersion}\\${artifactName}-${oldVersion}_${newVersion}${packaging}.diff"
+    }
+  }
+
+}
 
 class Dependency(val groupId: String, val artifactId: String) {
 

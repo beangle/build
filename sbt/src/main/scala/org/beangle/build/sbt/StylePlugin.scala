@@ -31,7 +31,7 @@ import scala.collection.mutable
 object StylePlugin extends sbt.AutoPlugin {
 
   object autoImport {
-    val licenseRepo = Licenses(this.getClass.getResourceAsStream("/org/beangle/style/license/header.md"))
+    val licenseRepo = Licenses(this.getClass.getResourceAsStream("/org/beangle/build/style/license/header.md"))
 
     val styleCheck = taskKey[Unit]("Style check")
     val styleFormat = taskKey[Unit]("Style format")
@@ -89,10 +89,10 @@ object StylePlugin extends sbt.AutoPlugin {
               |""".stripMargin
         )
       }
-
       if (sources.nonEmpty) {
+        //copy license to classes/META-INF
+        val base = new File(loadedBuild.value.root)
         licenseName(licenses.value) foreach { ln =>
-          val base = new File(loadedBuild.value.root)
           val copied = Licenses.copyLicense(base, crossTarget.value, licenseRepo, ln)
           if (!copied) log.warn(s"Missing license text of ${ln}")
         }

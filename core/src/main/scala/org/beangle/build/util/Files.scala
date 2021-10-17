@@ -17,17 +17,14 @@
 
 package org.beangle.build.util
 
+import java.io._
+import java.nio.channels.FileChannel
 import java.nio.charset.Charset
-import java.io.InputStreamReader
-import java.io.Writer
-import java.io.InputStream
-import java.io.Reader
-import java.io.File
-import java.io.OutputStream
-import java.io.BufferedReader
 
 object Files {
   private val defaultBufferSize = 1024 * 4
+
+  private val copyBufferSize = 1024 * 1024 * 30
 
   private val eof = -1
 
@@ -97,5 +94,84 @@ object Files {
         case ioe: Exception =>
       }
     }
+  }
+
+  def copy(srcFile: File, destFile: File): Unit = {
+    assert(null != srcFile)
+    assert(null != destFile)
+    if (!srcFile.exists) {
+      throw new FileNotFoundException("Source '" + srcFile + "' does not exist")
+    }
+    if (srcFile.isDirectory) {
+      throw new IOException("Source '" + srcFile + "' exists but is a directory")
+    }
+    if (srcFile.getCanonicalPath == destFile.getCanonicalPath) {
+      throw new IOException("Source '" + srcFile + "' and destination '" + destFile +
+        "' are the same")
+    }
+    val parentFile = destFile.getParentFile
+    if (parentFile != null) {
+      if (!parentFile.mkdirs() && !parentFile.isDirectory) {
+        throw new IOException("Destination '" + parentFile + "' directory cannot be created")
+      }
+    }
+    if (destFile.exists()) {
+      if (destFile.isDirectory) {
+        throw new IOException("Destination '" + destFile + "' exists but is a directory")
+      }
+      if (!destFile.canWrite) throw new IOException("Destination '" + destFile + "' exists but is read-only")
+    }
+    doCopy(srcFile, destFile, true)
+  }
+
+  private def doCopy(srcFile: File, destFile: File, preserveFileDate: Boolean): Unit = {
+    var fis: FileInputStream = null
+    var fos: FileOutputStream = null
+    var input: FileChannel = null
+    var output: FileChannel = null
+    try {
+      fis = new FileInputStream(srcFile)
+      fos = new FileOutputStream(destFile)
+      input = fis.getChannel
+      output = fos.getChannel
+      val size = input.size
+      var pos = 0L
+      var count = 0L
+      while (pos < size) {
+        count = if (size - pos > copyBufferSize) copyBufferSize else size - pos
+        pos += output.transferFrom(input, pos, count)
+      }
+    } finally {
+      IOs.close(output)
+      IOs.close(fos)
+      IOs.close(input)
+      IOs.close(fis)
+    }
+    if (srcFile.length != destFile.length) {
+      throw new IOException(s"Failed to copy full contents from '${srcFile}' to '${destFile}'")
+    }
+    if (preserveFileDate) {
+      destFile.setLastModified(srcFile.lastModified())
+    }
+  }
+
+
+  def touch(file: File): Unit = {
+    if (!file.exists()) IOs.close(writeOpen(file))
+    val success = file.setLastModified(System.currentTimeMillis)
+    if (!success) throw new IOException("Unable to set the last modification time for " + file)
+  }
+
+  def writeOpen(file: File, append: Boolean = false): FileOutputStream = {
+    if (file.exists()) {
+      if (file.isDirectory) throw new IOException("File '" + file + "' exists but is a directory")
+      if (!file.canWrite) throw new IOException("File '" + file + "' cannot be written to")
+    } else {
+      val parent = file.getParentFile
+      if (parent != null)
+        if (!parent.mkdirs() && !parent.isDirectory)
+          throw new IOException("Directory '" + parent + "' could not be created")
+    }
+    new FileOutputStream(file, append)
   }
 }

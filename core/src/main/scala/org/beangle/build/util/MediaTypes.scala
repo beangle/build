@@ -27,7 +27,7 @@ object MediaTypes {
 
   private def readMediaTypes(): Map[String, MediaType] = {
     val me = getClass.getClassLoader
-    val url = me.getResource("org/beangle/style/text.types")
+    val url = me.getResource("org/beangle/build/style/text.types")
     if (null == url) return Map.empty
     val buf = new collection.mutable.HashMap[String, MediaType]
     Files.readLines(url.openStream(), Charsets.UTF_8) foreach { line =>

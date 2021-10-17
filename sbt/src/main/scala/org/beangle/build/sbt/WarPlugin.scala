@@ -1,9 +1,28 @@
+/*
+ * Copyright (C) 2005, The Beangle Software.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 package org.beangle.build.sbt
 
+import org.beangle.build.util.IOs
 import sbt.Def.taskKey
 import sbt.Keys._
 import sbt._
 
+import java.io.{File, FileOutputStream}
 import java.util.jar.Manifest
 
 object WarPlugin extends AutoPlugin {
@@ -11,9 +30,8 @@ object WarPlugin extends AutoPlugin {
   import Keys.{`package` => pkg}
 
   object autoImport {
-    lazy val webappPrepare = taskKey[Seq[(File, String)]](
-      "prepare webapp contents for packaging"
-    )
+    lazy val webappPrepare = taskKey[Seq[(File, String)]]("prepare webapp contents for packaging")
+    val warAddDefaultWebxml = settingKey[Boolean]("add default web.xml when nessesary")
   }
 
   import autoImport._
@@ -24,7 +42,7 @@ object WarPlugin extends AutoPlugin {
     Def.task {
       val opt = (packageBin / packageOptions).value
       opt.filter {
-        case x: Package.ManifestAttributes => true
+        case _: Package.ManifestAttributes => true
         case _ => false
       }
     }
@@ -37,7 +55,8 @@ object WarPlugin extends AutoPlugin {
       Seq(
         (webappPrepare / sourceDirectory) := (Compile / sourceDirectory).value / "webapp",
         (webappPrepare / target) := (Compile / target).value / "webapp",
-        webappPrepare := webappPrepareTask.value
+        webappPrepare := webappPrepareTask.value,
+        warAddDefaultWebxml := true
       )
   }
 
@@ -59,11 +78,28 @@ object WarPlugin extends AutoPlugin {
       webappTarget.value
     }
 
+  private def prepareWebxml(webappSrcDir: File, log: util.Logger): Unit = {
+    val buildWebInf = s"${webappSrcDir.getAbsolutePath}/WEB-INF/"
+    val webxml = new File(buildWebInf + "/web.xml")
+    new File(buildWebInf).mkdirs()
+    if (!webxml.exists()) {
+      val os = new FileOutputStream(webxml)
+      IOs.copy(getClass.getResourceAsStream("/org/beangle/build/web/web.xml"), os)
+      IOs.close(os)
+      log.info(s"Add default web.xml ${webxml.getAbsolutePath}")
+    }
+  }
+
   private def webappPrepareTask =
     Def.task {
       val taskStreams = streams.value
       val webappTarget = _webappPrepare(webappPrepare / target, "webapp").value
+
+      // generate default web.xml and dependencies file
+      val log = streams.value.log
+      if (warAddDefaultWebxml.value) prepareWebxml(webappTarget, log)
       BootPlugin.generateDependenciesTask.value
+
       val m = (Compile / packageBin / mappings).value
       val webInfDir = webappTarget / "WEB-INF"
       val webappLibDir = webInfDir / "lib"
@@ -72,17 +108,9 @@ object WarPlugin extends AutoPlugin {
       Util.cacheify(
         "classes",
         { in =>
-          m find { case (src, dest) =>
-            src == in
-          } map { case (src, dest) =>
-            webInfDir / "classes" / dest
-          }
+          m find (_._1 == in) map (webInfDir / "classes" / _._2)
         },
-        (m filter { case (src, dest) =>
-          !src.isDirectory
-        } map { case (src, dest) =>
-          src
-        }).toSet,
+        (m filter (!_._1.isDirectory) map (_._1)).toSet,
         taskStreams
       )
 
