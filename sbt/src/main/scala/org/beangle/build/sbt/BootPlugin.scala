@@ -50,7 +50,7 @@ object BootPlugin extends sbt.AutoPlugin {
 
   lazy val generateDependenciesTask =
     Def.task {
-      generate(crossTarget.value.getAbsolutePath, bootClasspathsTask.value, scalaBinaryVersion.value, streams.value.log)
+      generate(crossTarget.value.getAbsolutePath, (Runtime / fullClasspath).value, scalaBinaryVersion.value, streams.value.log)
     }
 
   lazy val assembleDependenciesTask =
@@ -59,21 +59,12 @@ object BootPlugin extends sbt.AutoPlugin {
       val base = new File(build.root) / "target/repository"
       val isRoot = build.root == baseDirectory.value.toURI
       val log = streams.value.log
-      assemble(base, bootClasspathsTask.value, scalaBinaryVersion.value, log)
+      assemble(base, (Runtime / fullClasspath).value, scalaBinaryVersion.value, log)
       if (isRoot) {
         log.info(s"Project reposistory is generated in ${base}")
       }
     }
 
-  lazy val bootClasspathsTask = {
-    Def.task {
-      val classpaths = new collection.mutable.ArrayBuffer[Attributed[File]]
-      classpaths ++= (Compile / externalDependencyClasspath).value
-      classpaths ++= (Runtime / externalDependencyClasspath).value
-      classpaths ++= (Compile / internalDependencyClasspath).value
-      classpaths
-    }
-  }
 
   private def generate(target: String, dependencies: collection.Seq[Attributed[File]], sbv: String, log: util.Logger): Unit = {
     val folder = target + "/classes/META-INF/beangle"
