@@ -147,7 +147,7 @@ object WarPlugin extends AutoPlugin {
         "lib-deps",
         { in => Some(webappTarget / "WEB-INF" / "lib" / in.getName) },
         classpath.map(_.data).toSet filter { in =>
-          !in.isDirectory && in.getName.contains("SNAPSHOT") && in.getName.endsWith(".jar")
+          !in.isDirectory && in.getAbsolutePath.contains("-SNAPSHOT") && in.getName.endsWith(".jar")
         },
         taskStreams
       )
