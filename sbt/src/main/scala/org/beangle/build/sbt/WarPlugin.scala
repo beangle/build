@@ -80,7 +80,7 @@ object WarPlugin extends AutoPlugin {
       // generate default web.xml and dependencies file
       val log = streams.value.log
       if (warAddDefaultWebxml.value) prepareWebxml(webappTarget, log)
-      BootPlugin.generateDependenciesTask.value
+      BootPlugin.bootDependenciesTask.value
 
       val m = (Compile / packageBin / mappings).value
       val webInfDir = webappTarget / "WEB-INF"

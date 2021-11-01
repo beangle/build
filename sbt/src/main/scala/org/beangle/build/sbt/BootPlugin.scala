@@ -35,26 +35,21 @@ object BootPlugin extends sbt.AutoPlugin {
     val bootPrepare = taskKey[Unit]("prepare boot dependencies for packaging")
 
     lazy val bootSettings: Seq[Def.Setting[_]] = Seq(
-      bootDependencies := generateDependenciesTask.value,
+      bootDependencies := bootDependenciesTask.value,
       bootRepo := assembleDependenciesTask.value,
       bootPrepare := bootPrepareTask.value,
-      compile := compile.dependsOn(autoImport.bootPrepare).value
+      packageBin := packageBin.dependsOn(autoImport.bootPrepare).value
     )
   }
 
   import autoImport._
 
-  override def requires: Plugins = {
-    plugins.IvyPlugin
-  }
-
-  override def projectSettings = inConfig(Compile)(bootSettings)
+  override val projectSettings = inConfig(Compile)(bootSettings)
 
   override def trigger = allRequirements
 
   lazy val bootPrepareTask =
     Def.task {
-      println("in boot prepare task")
       val options = (packageBin / packageOptions).value
       val bootable = options.exists { po =>
         po match {
@@ -63,27 +58,18 @@ object BootPlugin extends sbt.AutoPlugin {
           case _ => false
         }
       }
+
       val log = streams.value.log
-      val classpaths = bootClasspathsTask.value
-      if (bootable)
+      val classpaths = (Runtime / fullClasspath).value
+      if (bootable) {
         generate(crossTarget.value.getAbsolutePath, classpaths, scalaBinaryVersion.value, log)
+      }
     }
 
-  lazy val generateDependenciesTask =
+  lazy val bootDependenciesTask =
     Def.task {
-      generate(crossTarget.value.getAbsolutePath, bootClasspathsTask.value, scalaBinaryVersion.value, streams.value.log)
+      generate(crossTarget.value.getAbsolutePath, (Runtime / fullClasspath).value, scalaBinaryVersion.value, streams.value.log)
     }
-
-  //Strange? (Runtime / fullClasspath) will block compile
-  lazy val bootClasspathsTask = {
-    Def.task {
-      val classpaths = new collection.mutable.ArrayBuffer[Attributed[File]]
-      classpaths ++= (Compile / externalDependencyClasspath).value
-      classpaths ++= (Runtime / externalDependencyClasspath).value
-      classpaths ++= (Compile / internalDependencyClasspath).value
-      classpaths
-    }
-  }
 
   lazy val assembleDependenciesTask =
     Def.task {
@@ -91,7 +77,7 @@ object BootPlugin extends sbt.AutoPlugin {
       val base = new File(build.root) / "target/repository"
       val isRoot = build.root == baseDirectory.value.toURI
       val log = streams.value.log
-      assemble(base, bootClasspathsTask.value, scalaBinaryVersion.value, log)
+      assemble(base, (Runtime / fullClasspath).value, scalaBinaryVersion.value, log)
       if (isRoot) {
         log.info(s"Project reposistory is generated in ${base}")
       }
