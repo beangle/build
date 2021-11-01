@@ -1,14 +1,14 @@
 /*
- * Copyright © 2005, The Beangle Software.
+ * Copyright (C) 2005, The Beangle Software.
  *
  * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
+ * it under the terms of the GNU Lesser General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.See the
  * GNU Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public License
@@ -39,9 +39,8 @@ object StylePlugin extends sbt.AutoPlugin {
     val headerEmptyLine: SettingKey[Boolean] =
       settingKey("An empty line should be added between the header and the body")
 
-    lazy val baseStyleSettings: Seq[Def.Setting[_]] = Seq(
+    lazy val styleSettings: Seq[Def.Setting[_]] = Seq(
       styleCheck := checkTask.value,
-      //styleCheckAll := styleCheck.?.all(ScopeFilter(configurations = inAnyConfiguration)).value.flatten.toSet,
       styleFormat := formatTask.value,
       packageBin / packageOptions += Package.ManifestAttributes(new java.util.jar.Attributes.Name("Bundle-License") -> licenseName(licenses.value).getOrElse("UNKOWN")),
       compile := compile.dependsOn(autoImport.styleCheck).value
@@ -55,9 +54,7 @@ object StylePlugin extends sbt.AutoPlugin {
   override def trigger = allRequirements
 
   // a group of settings that are automatically added to projects.
-  override val projectSettings =
-    inConfig(Compile)(baseStyleSettings) ++
-      inConfig(Test)(baseStyleSettings)
+  override val projectSettings = inConfig(Compile)(styleSettings) ++ inConfig(Test)(styleSettings)
 
   lazy val formatTask =
     Def.task {

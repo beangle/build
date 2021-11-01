@@ -31,7 +31,7 @@ object WarPlugin extends AutoPlugin {
 
   object autoImport {
     lazy val webappPrepare = taskKey[Seq[(File, String)]]("prepare webapp contents for packaging")
-    val warAddDefaultWebxml = settingKey[Boolean]("add default web.xml when nessesary")
+    lazy val warAddDefaultWebxml = settingKey[Boolean]("add default web.xml when nessesary")
   }
 
   import autoImport._
@@ -60,24 +60,6 @@ object WarPlugin extends AutoPlugin {
       )
   }
 
-  private def _webappPrepare(webappTarget: SettingKey[File], cacheName: String) =
-    Def.task {
-      val webappSrcDir = (webappPrepare / sourceDirectory).value
-      Util.cacheify(
-        cacheName,
-        { in =>
-          for {
-            f <- Some(in)
-            if !f.isDirectory
-            r <- IO.relativizeFile(webappSrcDir, f)
-          } yield IO.resolve(webappTarget.value, r)
-        },
-        (webappSrcDir ** "*").get.toSet,
-        streams.value
-      )
-      webappTarget.value
-    }
-
   private def prepareWebxml(webappSrcDir: File, log: util.Logger): Unit = {
     val buildWebInf = s"${webappSrcDir.getAbsolutePath}/WEB-INF/"
     val webxml = new File(buildWebInf + "/web.xml")
@@ -98,7 +80,7 @@ object WarPlugin extends AutoPlugin {
       // generate default web.xml and dependencies file
       val log = streams.value.log
       if (warAddDefaultWebxml.value) prepareWebxml(webappTarget, log)
-      BootPlugin.generateDependenciesTask.value
+      BootPlugin.bootDependenciesTask.value
 
       val m = (Compile / packageBin / mappings).value
       val webInfDir = webappTarget / "WEB-INF"
@@ -153,6 +135,24 @@ object WarPlugin extends AutoPlugin {
       )
 
       (webappTarget ** "*") pair (Path.relativeTo(webappTarget) | Path.flat)
+    }
+
+  private def _webappPrepare(webappTarget: SettingKey[File], cacheName: String) =
+    Def.task {
+      val webappSrcDir = (webappPrepare / sourceDirectory).value
+      Util.cacheify(
+        cacheName,
+        { in =>
+          for {
+            f <- Some(in)
+            if !f.isDirectory
+            r <- IO.relativizeFile(webappSrcDir, f)
+          } yield IO.resolve(webappTarget.value, r)
+        },
+        (webappSrcDir ** "*").get.toSet,
+        streams.value
+      )
+      webappTarget.value
     }
 
 }

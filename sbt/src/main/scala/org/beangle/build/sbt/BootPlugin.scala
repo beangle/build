@@ -20,6 +20,7 @@ package org.beangle.build.sbt
 import org.beangle.build.boot.Dependency
 import org.beangle.build.util.Files
 import sbt.Keys._
+import sbt.Package.{MainClass, ManifestAttributes}
 import sbt.{File, _}
 
 import java.io.{FileWriter, IOException}
@@ -31,24 +32,41 @@ object BootPlugin extends sbt.AutoPlugin {
   object autoImport {
     val bootDependencies = taskKey[Unit]("Generate boot dependencies file")
     val bootRepo = taskKey[Unit]("Assemble boot dependencies to make a repo")
+    val bootPrepare = taskKey[Unit]("prepare boot dependencies for packaging")
 
-    lazy val baseBootSettings: Seq[Def.Setting[_]] = Seq(
-      bootDependencies := generateDependenciesTask.value,
+    lazy val bootSettings: Seq[Def.Setting[_]] = Seq(
+      bootDependencies := bootDependenciesTask.value,
       bootRepo := assembleDependenciesTask.value,
+      bootPrepare := bootPrepareTask.value,
+      packageBin := packageBin.dependsOn(autoImport.bootPrepare).value
     )
   }
 
   import autoImport._
 
-  override def requires: Plugins = {
-    plugins.IvyPlugin
-  }
-
-  override lazy val projectSettings = inConfig(Compile)(baseBootSettings)
+  override val projectSettings = inConfig(Compile)(bootSettings)
 
   override def trigger = allRequirements
 
-  lazy val generateDependenciesTask =
+  lazy val bootPrepareTask =
+    Def.task {
+      val options = (packageBin / packageOptions).value
+      val bootable = options.exists { po =>
+        po match {
+          case _: MainClass => true
+          case ma: ManifestAttributes => ma.attributes.exists(x => x._1 == java.util.jar.Attributes.Name.MAIN_CLASS)
+          case _ => false
+        }
+      }
+
+      val log = streams.value.log
+      val classpaths = (Runtime / fullClasspath).value
+      if (bootable) {
+        generate(crossTarget.value.getAbsolutePath, classpaths, scalaBinaryVersion.value, log)
+      }
+    }
+
+  lazy val bootDependenciesTask =
     Def.task {
       generate(crossTarget.value.getAbsolutePath, (Runtime / fullClasspath).value, scalaBinaryVersion.value, streams.value.log)
     }
