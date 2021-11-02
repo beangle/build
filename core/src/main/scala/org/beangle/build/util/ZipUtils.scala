@@ -52,7 +52,6 @@ object ZipUtils {
     zos.putArchiveEntry(entry)
     val fis = new FileInputStream(file)
     IOs.copy(fis, zos)
-    fis.close()
     zos.closeArchiveEntry()
   }
 
