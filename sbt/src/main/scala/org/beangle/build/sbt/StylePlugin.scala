@@ -64,7 +64,7 @@ object StylePlugin extends sbt.AutoPlugin {
       val sources = new mutable.ArrayBuffer[File]
       sources ++= (Compile / unmanagedSourceDirectories).value
       sources ++= (Test / unmanagedSourceDirectories).value
-      log.info("Style formatting for " + name.value)
+      log.info("style formatting for " + name.value)
       Style.format(sources, None, WsOptions.Default, LicenseOptions(license, headerEmptyLine.value))
       (packageBin / packageOptions) += Package.ManifestAttributes(new Attributes.Name("Bundle-License") -> license)
     }
@@ -77,7 +77,7 @@ object StylePlugin extends sbt.AutoPlugin {
       val sources = new mutable.ArrayBuffer[File]
       sources ++= (Compile / unmanagedSourceDirectories).value
       sources ++= (Test / unmanagedSourceDirectories).value
-      log.info("Style checking for " + name.value)
+      log.info("style checking for " + name.value)
       val warns = Style.check(sources, LicenseOptions(license, headerEmptyLine.value))
       if (warns.nonEmpty) {
         throw new MessageOnlyException(

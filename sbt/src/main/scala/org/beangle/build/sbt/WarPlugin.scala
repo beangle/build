@@ -22,7 +22,7 @@ import sbt.Def.taskKey
 import sbt.Keys._
 import sbt._
 
-import java.io.{File, FileOutputStream}
+import java.io.{File, FileInputStream, FileOutputStream}
 import java.util.jar.Manifest
 
 object WarPlugin extends AutoPlugin {
@@ -68,25 +68,25 @@ object WarPlugin extends AutoPlugin {
       val os = new FileOutputStream(webxml)
       IOs.copy(getClass.getResourceAsStream("/org/beangle/build/web/web.xml"), os)
       IOs.close(os)
-      log.info(s"Add default web.xml ${webxml.getAbsolutePath}")
+      log.info(s"add default web.xml ${webxml.getAbsolutePath}")
     }
   }
 
   private def webappPrepareTask =
     Def.task {
-      val taskStreams = streams.value
-      val webappTarget = _webappPrepare(webappPrepare / target, "webapp").value
 
-      // generate default web.xml and dependencies file
+      // 1. copy src/main/webapp to target/webapp
+      val webappTarget = assembleWebapp(webappPrepare / target, "webapp").value
       val log = streams.value.log
+      // 1.1 generate default web.xml and dependencies file
       if (warAddDefaultWebxml.value) prepareWebxml(webappTarget, log)
-      BootPlugin.bootDependenciesTask.value
 
+      // 2. copy project's classes to WEB-INF/classes
       val m = (Compile / packageBin / mappings).value
       val webInfDir = webappTarget / "WEB-INF"
       val webappLibDir = webInfDir / "lib"
 
-      // copy project's classes to WEB-INF/classes
+      val taskStreams = streams.value
       Util.cacheify(
         "classes",
         { in =>
@@ -96,9 +96,20 @@ object WarPlugin extends AutoPlugin {
         taskStreams
       )
 
+      //2.2 generate and copy dependencies
+      val dependencyFile = BootPlugin.bootDependenciesTask.value
+      dependencyFile foreach { df =>
+        val beangleDir = s"${webInfDir.getAbsolutePath}/classes/META-INF/beangle"
+        new File(beangleDir).mkdirs()
+        val is = new FileInputStream(df)
+        val os = new FileOutputStream(beangleDir + "/" + BootPlugin.DependenciesFileName)
+        IOs.copy(is, os)
+        IOs.close(os)
+      }
+
+      // 3. create .jar files for depended-on projects
       val classpath = (Runtime / fullClasspath).value
       if (version.value.contains("SNAPSHOT")) {
-        // create .jar files for depended-on projects
         for {
           cpItem <- classpath.toList
           dir = cpItem.data
@@ -124,7 +135,7 @@ object WarPlugin extends AutoPlugin {
         } yield ()
       }
 
-      // copy SNAPSHOT dependency libraries to WEB-INF/lib
+      // 4. copy SNAPSHOT dependency libraries to WEB-INF/lib
       Util.cacheify(
         "lib-deps",
         { in => Some(webappTarget / "WEB-INF" / "lib" / in.getName) },
@@ -137,9 +148,16 @@ object WarPlugin extends AutoPlugin {
       (webappTarget ** "*") pair (Path.relativeTo(webappTarget) | Path.flat)
     }
 
-  private def _webappPrepare(webappTarget: SettingKey[File], cacheName: String) =
+  /** assemble web files
+   * copy src/main/webapp to target/webapp
+   *
+   * @param webappTarget target/webapp
+   * @param cacheName
+   * @return
+   */
+  private def assembleWebapp(webappTarget: SettingKey[File], cacheName: String) =
     Def.task {
-      val webappSrcDir = (webappPrepare / sourceDirectory).value
+      val webappSrcDir = (webappPrepare / sourceDirectory).value //src/main/webapp
       Util.cacheify(
         cacheName,
         { in =>

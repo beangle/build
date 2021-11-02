@@ -27,7 +27,7 @@ import java.io.{FileWriter, IOException}
 
 object BootPlugin extends sbt.AutoPlugin {
 
-  private val fileName = "dependencies"
+  val DependenciesFileName = "dependencies"
 
   object autoImport {
     val bootDependencies = taskKey[Unit]("Generate boot dependencies file")
@@ -79,15 +79,14 @@ object BootPlugin extends sbt.AutoPlugin {
       val log = streams.value.log
       assemble(base, (Runtime / fullClasspath).value, scalaBinaryVersion.value, log)
       if (isRoot) {
-        log.info(s"Project reposistory is generated in ${base}")
+        log.info(s"project reposistory is generated in ${base}")
       }
     }
 
-
-  private def generate(target: String, dependencies: collection.Seq[Attributed[File]], sbv: String, log: util.Logger): Unit = {
+  private def generate(target: String, dependencies: collection.Seq[Attributed[File]], sbv: String, log: util.Logger): Option[File] = {
     val folder = target + "/classes/META-INF/beangle"
     new File(folder).mkdirs()
-    val file = new File(folder + "/" + fileName)
+    val file = new File(folder + "/" + DependenciesFileName)
     file.delete()
     try {
       file.createNewFile()
@@ -105,9 +104,10 @@ object BootPlugin extends sbt.AutoPlugin {
       val fw = new FileWriter(file)
       fw.write(results.toSeq.sorted.mkString("\n"))
       fw.close()
-      log.info(s"Generated dependencies:(${results.size}) at " + file.getAbsolutePath)
+      log.info(s"generated ${results.size} dependencies at " + file.getAbsolutePath)
+      Some(file)
     } catch {
-      case e: IOException => e.printStackTrace()
+      case e: IOException => e.printStackTrace(); None
     }
   }
 
