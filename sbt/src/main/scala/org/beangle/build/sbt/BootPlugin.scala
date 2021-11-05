@@ -62,13 +62,15 @@ object BootPlugin extends sbt.AutoPlugin {
       val log = streams.value.log
       val classpaths = (Runtime / fullClasspath).value
       if (bootable) {
-        generate(crossTarget.value.getAbsolutePath, classpaths, scalaBinaryVersion.value, log)
+        val excludeGavs = Set(organization.value + ":" + name.value) //exclude itself
+        generate(crossTarget.value.getAbsolutePath, classpaths, scalaBinaryVersion.value, excludeGavs, log)
       }
     }
 
   lazy val bootDependenciesTask =
     Def.task {
-      generate(crossTarget.value.getAbsolutePath, (Runtime / fullClasspath).value, scalaBinaryVersion.value, streams.value.log)
+      val excludeGavs = Set(organization.value + ":" + name.value) //exclude itself
+      generate(crossTarget.value.getAbsolutePath, (Runtime / fullClasspath).value, scalaBinaryVersion.value, excludeGavs, streams.value.log)
     }
 
   lazy val assembleDependenciesTask =
@@ -83,7 +85,8 @@ object BootPlugin extends sbt.AutoPlugin {
       }
     }
 
-  private def generate(target: String, dependencies: collection.Seq[Attributed[File]], sbv: String, log: util.Logger): Option[File] = {
+  private def generate(target: String, dependencies: collection.Seq[Attributed[File]], sbv: String,
+                       excludeGavs: Set[String], log: util.Logger): Option[File] = {
     val folder = target + "/classes/META-INF/beangle"
     new File(folder).mkdirs()
     val file = new File(folder + "/" + DependenciesFileName)
@@ -94,8 +97,9 @@ object BootPlugin extends sbt.AutoPlugin {
       dependencies foreach { d =>
         d.get(Keys.moduleID.key) match {
           case Some(m) =>
+            val gav = m.organization + ":" + m.name
             val scope = m.configurations.getOrElse("compile")
-            if ("test" != scope && !m.revision.contains("SNAPSHOT")) {
+            if (!excludeGavs.contains(gav) && "test" != scope && !m.revision.contains("SNAPSHOT")) {
               results += toGav(m, sbv)
             }
           case _ =>
