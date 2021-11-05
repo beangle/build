@@ -86,15 +86,14 @@ object StylePlugin extends sbt.AutoPlugin {
               |""".stripMargin
         )
       }
+      //copy license to classes/META-INF
       if (sources.nonEmpty) {
-        //copy license to classes/META-INF
         val base = new File(loadedBuild.value.root)
         licenseName(licenses.value) foreach { ln =>
           val copied = Licenses.copyLicense(base, crossTarget.value, licenseRepo, ln)
           if (!copied) log.warn(s"Missing license text of ${ln}")
         }
       }
-
     }
 
   def licenseName(licenses: Seq[(String, URL)]): Option[String] = {

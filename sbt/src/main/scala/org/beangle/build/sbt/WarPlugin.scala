@@ -74,7 +74,6 @@ object WarPlugin extends AutoPlugin {
 
   private def webappPrepareTask =
     Def.task {
-
       // 1. copy src/main/webapp to target/webapp
       val webappTarget = assembleWebapp(webappPrepare / target, "webapp").value
       val log = streams.value.log
