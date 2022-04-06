@@ -19,10 +19,10 @@ package org.beangle.build.style
 
 import org.beangle.build.style.license.{CommentStyle, LicenseOptions}
 import org.beangle.build.style.ws.{DefaultWSFormatter, WsOptions}
-import org.beangle.build.util.{Charsets, EOF, SourceFileWalker, Files,Strings}
+import org.beangle.build.util._
+import scala.collection.mutable
 
 import java.io.{File, FileInputStream, FileOutputStream}
-import scala.collection.mutable
 
 object Style {
 
@@ -44,19 +44,24 @@ object Style {
 
     val wsFormatter = builder.build()
     SourceFileWalker.visit(dir, ext, Set.empty, (file: File) => {
-      val content = Files.readString(new FileInputStream(file))
-      var rs = wsFormatter.format(content)
-      CommentStyle.mappings.get(Files.extension(file)) foreach { cs =>
-        val existed = cs.extract(content)
-        val newLicense = cs(licenseOptions.license) + (if (licenseOptions.hasSeperator) EOF.LF else "")
-        if (existed != newLicense) {
-          rs = newLicense + content.substring(existed.length)
+      if (file.canWrite) {
+        val content = Files.readString(new FileInputStream(file))
+        var rs = wsFormatter.format(content)
+
+        CommentStyle.mappings.get(Files.extension(file)) foreach { cs =>
+          val existed = cs.extract(content)
+          val newLicense = cs(licenseOptions.license) + (if (licenseOptions.hasSeperator) EOF.LF else "")
+          if (existed != newLicense) {
+            rs = newLicense + content.substring(existed.length)
+          }
         }
-      }
-      if (rs != content) {
-        val fos = new FileOutputStream(file)
-        Files.write(rs, fos, Charsets.UTF_8)
-        Files.close(fos)
+        if (rs != content) {
+          val fos = new FileOutputStream(file)
+          Files.write(rs, fos, Charsets.UTF_8)
+          Files.close(fos)
+        }
+      } else {
+        println("Cannot write:"+file.getAbsolutePath)
       }
     })
   }
