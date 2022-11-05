@@ -18,23 +18,23 @@
 package org.beangle.build.sbt
 
 import org.beangle.build.util.IOs
+import sbt.*
 import sbt.Def.taskKey
-import sbt.Keys._
-import sbt._
+import sbt.Keys.*
 
 import java.io.{File, FileInputStream, FileOutputStream}
 import java.util.jar.Manifest
 
 object WarPlugin extends AutoPlugin {
 
-  import Keys.{`package` => pkg}
+  import Keys.`package` as pkg
 
   object autoImport {
     lazy val webappPrepare = taskKey[Seq[(File, String)]]("prepare webapp contents for packaging")
     lazy val warAddDefaultWebxml = settingKey[Boolean]("add default web.xml when nessesary")
   }
 
-  import autoImport._
+  import autoImport.*
 
   override def requires = BootPlugin
 
@@ -86,7 +86,7 @@ object WarPlugin extends AutoPlugin {
       val webappLibDir = webInfDir / "lib"
 
       val taskStreams = streams.value
-      Util.cacheify(
+      Utils.cacheify(
         "classes",
         { in =>
           m find (_._1 == in) map (webInfDir / "classes" / _._2)
@@ -126,7 +126,7 @@ object WarPlugin extends AutoPlugin {
               None
           }
           jarFile = cpArt.name + ".jar"
-          _ = Util.jar(
+          _ = Utils.jar(
             sources = files,
             outputJar = webappLibDir / jarFile,
             manifest = new Manifest
@@ -135,7 +135,7 @@ object WarPlugin extends AutoPlugin {
       }
 
       // 4. copy SNAPSHOT dependency libraries to WEB-INF/lib
-      Util.cacheify(
+      Utils.cacheify(
         "lib-deps",
         { in => Some(webappTarget / "WEB-INF" / "lib" / in.getName) },
         classpath.map(_.data).toSet filter { in =>
@@ -157,7 +157,7 @@ object WarPlugin extends AutoPlugin {
   private def assembleWebapp(webappTarget: SettingKey[File], cacheName: String) =
     Def.task {
       val webappSrcDir = (webappPrepare / sourceDirectory).value //src/main/webapp
-      Util.cacheify(
+      Utils.cacheify(
         cacheName,
         { in =>
           for {

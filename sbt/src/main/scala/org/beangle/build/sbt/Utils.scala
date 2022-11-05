@@ -22,7 +22,7 @@ import sbt._
 import sbt.util.CacheStoreFactory
 import sbt.util.FilesInfo.{exists, lastModified}
 
-object Util {
+object Utils {
 
   def jar(sources: Traversable[(File, String)], outputJar: File, manifest: java.util.jar.Manifest): Unit =
     io.IO.jar(sources, outputJar, manifest, None)
