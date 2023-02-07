@@ -2,7 +2,7 @@ import sbt.Keys._
 import sbt._
 
 object BuildSettings {
-  val scalaTest = "org.scalatest" %% "scalatest" % "3.2.5"
+  val scalaTest = "org.scalatest" %% "scalatest" % "3.2.14"
 
   val commonSettings = Seq(
     organizationName := "The Beangle Software",

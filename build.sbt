@@ -1,7 +1,7 @@
 import BuildSettings._
 import sbt._
 
-ThisBuild / version := "0.0.11-SNAPSHOT"
+ThisBuild / version := "0.0.11"
 ThisBuild / description := "Beangle Build Tools."
 ThisBuild / organization := "org.beangle.build"
 ThisBuild / homepage := Some(url("https://github.com/beangle/build"))
@@ -27,7 +27,7 @@ ThisBuild / publishTo := {
   else Some("releases" at nexus + "service/local/staging/deploy/maven2")
 }
 
-val apache_commons_compress = "org.apache.commons" % "commons-compress" % "1.21"
+val apache_commons_compress = "org.apache.commons" % "commons-compress" % "1.22"
 
 lazy val root = (project in file("."))
   .settings(
