@@ -32,13 +32,11 @@ object BootPlugin extends sbt.AutoPlugin {
   object autoImport {
     val bootDependencies = taskKey[Unit]("Generate boot dependencies file")
     val bootRepo = taskKey[Unit]("Assemble boot dependencies to make a repo")
-    val bootPrepare = taskKey[Unit]("prepare boot dependencies for packaging")
 
     lazy val bootSettings: Seq[Def.Setting[_]] = Seq(
       bootDependencies := bootDependenciesTask.value,
       bootRepo := assembleDependenciesTask.value,
-      bootPrepare := bootPrepareTask.value,
-      packageBin := packageBin.dependsOn(autoImport.bootPrepare).value
+      packageBin := packageBin.dependsOn(autoImport.bootDependencies).value
     )
   }
 
@@ -47,25 +45,6 @@ object BootPlugin extends sbt.AutoPlugin {
   override val projectSettings = inConfig(Compile)(bootSettings)
 
   override def trigger = allRequirements
-
-  lazy val bootPrepareTask =
-    Def.task {
-      val options = (packageBin / packageOptions).value
-      val bootable = options.exists { po =>
-        po match {
-          case _: MainClass => true
-          case ma: ManifestAttributes => ma.attributes.exists(x => x._1 == java.util.jar.Attributes.Name.MAIN_CLASS)
-          case _ => false
-        }
-      }
-
-      val log = streams.value.log
-      val classpaths = (Runtime / fullClasspath).value
-      if (bootable) {
-        val excludeGavs = Set(organization.value + ":" + name.value) //exclude itself
-        generate(crossTarget.value.getAbsolutePath, classpaths, scalaBinaryVersion.value, excludeGavs, log)
-      }
-    }
 
   lazy val bootDependenciesTask =
     Def.task {
@@ -81,7 +60,7 @@ object BootPlugin extends sbt.AutoPlugin {
       val log = streams.value.log
       assemble(base, (Runtime / fullClasspath).value, scalaBinaryVersion.value, log)
       if (isRoot) {
-        log.info(s"project reposistory is generated in ${base}")
+        log.info(s"project repository is generated in ${base}")
       }
     }
 
