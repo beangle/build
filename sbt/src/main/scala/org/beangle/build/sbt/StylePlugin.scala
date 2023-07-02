@@ -42,7 +42,7 @@ object StylePlugin extends sbt.AutoPlugin {
     lazy val styleSettings: Seq[Def.Setting[_]] = Seq(
       styleCheck := checkTask.value,
       styleFormat := formatTask.value,
-      packageBin / packageOptions += Package.ManifestAttributes(new java.util.jar.Attributes.Name("Bundle-License") -> licenseName(licenses.value).getOrElse("UNKOWN")),
+      packageBin / packageOptions += Package.ManifestAttributes(new java.util.jar.Attributes.Name("Bundle-License") -> licenseName(licenses.value).getOrElse("UNKNOWN")),
       compile := compile.dependsOn(autoImport.styleCheck).value
     )
   }
