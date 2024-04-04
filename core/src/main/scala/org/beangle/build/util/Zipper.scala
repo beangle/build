@@ -18,13 +18,13 @@
  */
 package org.beangle.build.util
 
+import org.apache.commons.compress.archivers.ArchiveStreamFactory
 import org.apache.commons.compress.archivers.zip.{ZipArchiveEntry, ZipArchiveOutputStream}
-import org.apache.commons.compress.archivers.{ArchiveOutputStream, ArchiveStreamFactory}
 import org.beangle.build.util.Files./
 
 import java.io.{File, FileInputStream, FileOutputStream}
 
-object ZipUtils {
+object Zipper {
 
   def zip(dir: File, zip: File, encoding: String = "utf-8"): Unit = {
     if (!dir.exists()) {
@@ -36,9 +36,9 @@ object ZipUtils {
     }
 
     val fos = new FileOutputStream(zip)
-    val zos = new ArchiveStreamFactory().createArchiveOutputStream(ArchiveStreamFactory.ZIP, fos)
+    val zos: ZipArchiveOutputStream = new ArchiveStreamFactory().createArchiveOutputStream(ArchiveStreamFactory.ZIP, fos)
     if (null != encoding) {
-      zos.asInstanceOf[ZipArchiveOutputStream].setEncoding(encoding)
+      zos.setEncoding(encoding)
     }
     Dirs.on(dir).ls() foreach { f =>
       addFile(dir, new File(dir.getAbsolutePath + / + f), zos)
@@ -46,33 +46,34 @@ object ZipUtils {
     zos.close()
   }
 
-  def addElement(root: File, file: File, zos: ArchiveOutputStream):Unit={
-    val entryName = root.toURI.relativize(file.toURI).getPath
-    val entry = new ZipArchiveEntry(entryName)
-    zos.putArchiveEntry(entry)
-    val fis = new FileInputStream(file)
-    IOs.copy(fis, zos)
-    zos.closeArchiveEntry()
-  }
-
-  def addFile(root: File, dir: File, zos: ArchiveOutputStream): Unit = {
-    if( dir.isDirectory){
+  private def addFile(root: File, dir: File, zos: ZipArchiveOutputStream): Unit = {
+    if (dir.isDirectory) {
       Dirs.on(dir).ls() foreach { a =>
-        val currentFile = new File(dir.getAbsolutePath + / + a)
+        val currentFile = new File(dir.getAbsolutePath + Files./ + a)
         var entryName = root.toURI.relativize(currentFile.toURI).getPath
         if (currentFile.isDirectory) {
-          if (!entryName.endsWith("/")) { //must be /,not platform dependency \
+          //must be /,not platform dependency \
+          if (!entryName.endsWith("/")) {
             entryName = entryName + "/"
           }
           val entry = new ZipArchiveEntry(entryName)
           zos.putArchiveEntry(entry)
           addFile(root, currentFile, zos)
         } else {
-          addElement(root,currentFile,zos)
+          addElement(root, currentFile, zos)
         }
       }
-    }else{
-      addElement(root,dir,zos)
+    } else {
+      addElement(root, dir, zos)
     }
+  }
+
+  private def addElement(root: File, file: File, zos: ZipArchiveOutputStream): Unit = {
+    val entryName = root.toURI.relativize(file.toURI).getPath
+    val entry = new ZipArchiveEntry(entryName)
+    zos.putArchiveEntry(entry)
+    val fis = new FileInputStream(file)
+    IOs.copy(fis, zos)
+    zos.closeArchiveEntry()
   }
 }

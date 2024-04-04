@@ -19,11 +19,11 @@ package org.beangle.build.sbt
 
 import org.beangle.build.boot.Dependency
 import org.beangle.build.util.Files
-import sbt.Keys._
-import sbt.Package.{MainClass, ManifestAttributes}
-import sbt.{File, _}
+import sbt.Keys.*
+import sbt.{File, *}
 
 import java.io.{FileWriter, IOException}
+import scala.collection.mutable
 
 object BootPlugin extends sbt.AutoPlugin {
 
@@ -35,12 +35,12 @@ object BootPlugin extends sbt.AutoPlugin {
 
     lazy val bootSettings: Seq[Def.Setting[_]] = Seq(
       bootDependencies := bootDependenciesTask.value,
-      bootRepo := assembleDependenciesTask.value,
+      bootRepo := bootRepoTask.value,
       packageBin := packageBin.dependsOn(autoImport.bootDependencies).value
     )
   }
 
-  import autoImport._
+  import autoImport.*
 
   override val projectSettings = inConfig(Compile)(bootSettings)
 
@@ -48,21 +48,34 @@ object BootPlugin extends sbt.AutoPlugin {
 
   lazy val bootDependenciesTask =
     Def.task {
-      val excludeGavs = Set(organization.value + ":" + name.value) //exclude itself
-      generate(crossTarget.value.getAbsolutePath, (Runtime / fullClasspath).value, scalaBinaryVersion.value, excludeGavs, streams.value.log)
+      val excludeGavs = Set(organization.value + ":" + name.value) ++ findOptionalGavs(libraryDependencies.value) //exclude itself
+      generate(crossTarget.value.getAbsolutePath, (Runtime / fullClasspath).value, scalaBinaryVersion.value,
+        excludeGavs, streams.value.log)
     }
 
-  lazy val assembleDependenciesTask =
+  lazy val bootRepoTask =
     Def.task {
       val build = loadedBuild.value
       val base = new File(build.root) / "target/repository"
       val isRoot = build.root == baseDirectory.value.toURI
       val log = streams.value.log
-      assemble(base, (Runtime / fullClasspath).value, scalaBinaryVersion.value, log)
+      val excludeGavs = Set(organization.value + ":" + name.value) ++ findOptionalGavs(libraryDependencies.value)
+      assemble(base, (Runtime / fullClasspath).value, scalaBinaryVersion.value, excludeGavs, log)
       if (isRoot) {
         log.info(s"project repository is generated in ${base}")
       }
     }
+
+  private def findOptionalGavs(dependencies: collection.Seq[ModuleID]): Set[String] = {
+    val optionals = new mutable.HashSet[String]
+    dependencies foreach { m =>
+      val scope = m.configurations.getOrElse("compile")
+      if (scope == "optional") {
+        optionals.add(m.organization + ":" + m.name)
+      }
+    }
+    optionals.toSet
+  }
 
   private def generate(target: String, dependencies: collection.Seq[Attributed[File]], sbv: String,
                        excludeGavs: Set[String], log: util.Logger): Option[File] = {
@@ -74,7 +87,7 @@ object BootPlugin extends sbt.AutoPlugin {
       file.createNewFile()
       val results = new collection.mutable.HashSet[String]
       dependencies foreach { d =>
-        d.get(Keys.moduleID.key) match {
+        d.get(moduleID.key) match {
           case Some(m) =>
             val gav = m.organization + ":" + m.name
             val scope = m.configurations.getOrElse("compile")
@@ -100,14 +113,16 @@ object BootPlugin extends sbt.AutoPlugin {
    * @param dependencies
    * @param log
    */
-  private def assemble(projectRepoDir: File, dependencies: collection.Seq[Attributed[File]], sbv: String, log: util.Logger): Unit = {
+  private def assemble(projectRepoDir: File, dependencies: collection.Seq[Attributed[File]], sbv: String,
+                       excludeGavs: Set[String], log: util.Logger): Unit = {
     projectRepoDir.mkdirs()
     val artifacts = new collection.mutable.ArrayBuffer[Attributed[File]]
     dependencies foreach { d =>
       d.get(Keys.moduleID.key) match {
         case Some(m) =>
+          val gav = m.organization + ":" + m.name
           val scope = m.configurations.getOrElse("compile")
-          if ("test" != scope && !m.revision.contains("SNAPSHOT")) artifacts += d
+          if (!excludeGavs.contains(gav) && "test" != scope && !m.revision.contains("SNAPSHOT")) artifacts += d
         case _ =>
       }
     }
