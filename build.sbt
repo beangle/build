@@ -1,7 +1,7 @@
-import BuildSettings._
-import sbt._
+import BuildSettings.*
+import sbt.*
 
-ThisBuild / version := "0.0.14"
+ThisBuild / version := "0.0.15"
 ThisBuild / description := "Beangle Build Tools."
 ThisBuild / organization := "org.beangle.build"
 ThisBuild / homepage := Some(url("https://github.com/beangle/build"))
@@ -27,27 +27,12 @@ ThisBuild / publishTo := {
   else Some("releases" at nexus + "service/local/staging/deploy/maven2")
 }
 
-val apache_commons_compress = "org.apache.commons" % "commons-compress" % "1.26.1"
+val apache_commons_compress = "org.apache.commons" % "commons-compress" % "1.27.1"
 
 lazy val root = (project in file("."))
-  .settings(
-    name := "beangle-build",
-    commonSettings
-  )
-  .aggregate(core, sbtplugin)
-
-lazy val core = (project in file("core"))
-  .settings(
-    name := "beangle-build-core",
-    commonSettings,
-    libraryDependencies ++= Seq(apache_commons_compress)
-  )
-
-lazy val sbtplugin = (project in file("sbt"))
   .enablePlugins(SbtPlugin)
   .settings(
     name := "sbt-beangle-build",
+    libraryDependencies ++= Seq(apache_commons_compress),
     commonSettings
-  ).dependsOn(core)
-
-publish / skip := true
+  )
