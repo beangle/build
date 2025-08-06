@@ -17,12 +17,15 @@
 
 package org.beangle.build.sbt
 
-import org.beangle.build.util.IOs
+import org.beangle.build.boot.Dependency
+import org.beangle.build.util.{Bsdiff, Files, IOs}
 import sbt.*
 import sbt.Def.taskKey
 import sbt.Keys.*
 
 import java.io.{File, FileInputStream, FileOutputStream}
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 import java.util.jar.Manifest
 
 object WarPlugin extends AutoPlugin {
@@ -30,8 +33,10 @@ object WarPlugin extends AutoPlugin {
   import Keys.`package` as pkg
 
   object autoImport {
-    lazy val webappPrepare = taskKey[Seq[(File, String)]]("prepare webapp contents for packaging")
+    lazy val warPrepare = taskKey[Seq[(File, String)]]("prepare webapp contents for packaging")
     lazy val warAddDefaultWebxml = settingKey[Boolean]("add default web.xml when nessesary")
+    val warDiff = inputKey[Unit]("Generate war diff")
+    lazy val warBuild = taskKey[File]("build snapshot with timestamp war")
   }
 
   import autoImport.*
@@ -48,16 +53,35 @@ object WarPlugin extends AutoPlugin {
     }
 
   override def projectSettings: Seq[Setting[_]] = {
-    Defaults.packageTaskSettings(pkg, webappPrepare) ++
+    Defaults.packageTaskSettings(pkg, warPrepare) ++
       Seq(pkg / artifact := Artifact(moduleName.value, "war", "war")) ++
       addArtifact(Compile / pkg / artifact, pkg) ++
       Seq(pkg / packageOptions ++= manifestOptions.value) ++
       Seq(
-        (webappPrepare / sourceDirectory) := (Compile / sourceDirectory).value / "webapp",
-        (webappPrepare / target) := (Compile / target).value / "webapp",
-        webappPrepare := webappPrepareTask.value,
-        warAddDefaultWebxml := true
-      )
+        (warPrepare / sourceDirectory) := (Compile / sourceDirectory).value / "webapp",
+        (warPrepare / target) := (Compile / target).value / "webapp",
+        warPrepare := webappPrepareTask.value,
+        warDiff := {
+          val a = (Compile / Keys.`package` / artifact).value
+          if (a.extension == "war") {
+            import complete.DefaultParsers.*
+            val args = spaceDelimited("<arg>").parsed
+            val log = streams.value.log
+            if (args.size < 1) {
+              log.error("usage:warDiff oldVersion [newVersion]")
+            } else {
+              val m = (Compile / projectID).value
+              resolvers.value.find(_.isInstanceOf[MavenRepository]) foreach { mc =>
+                val m2Root = mc.asInstanceOf[MavenRepository].root
+                calcWarDiff(m2Root, m, args.head, args.tail.headOption.getOrElse(m.revision),
+                  crossTarget.value.getAbsolutePath, scalaBinaryVersion.value, log)
+              }
+            }
+          }
+        },
+        warBuild := warBuildTask.value,
+        warBuild := warBuild.dependsOn(pkg).value,
+        warAddDefaultWebxml := true)
   }
 
   private def prepareWebxml(webappSrcDir: File, log: util.Logger): Unit = {
@@ -68,14 +92,37 @@ object WarPlugin extends AutoPlugin {
       val os = new FileOutputStream(webxml)
       IOs.copy(getClass.getResourceAsStream("/org/beangle/build/web/web.xml"), os)
       IOs.close(os)
-      log.info(s"add default web.xml ${webxml.getAbsolutePath}")
+      log.info(s"Append default web.xml ${webxml.getAbsolutePath}")
+    }
+  }
+
+  private def warBuildTask = {
+    Def.task {
+      val a = (Compile / Keys.`package` / artifact).value
+      val dir = (warBuild / target).value.getAbsolutePath + "/"
+      val file = new File(dir + a.name + "-" + version.value + "." + a.extension)
+      val log = streams.value.log
+      if (file.exists()) {
+        val formater = DateTimeFormatter.ofPattern("yyyyMMdd.HHmmss")
+        val buildNumber = formater.format(LocalDateTime.now) + "-1"
+        val build = new File(dir + a.name + "-" + version.value.replace("-SNAPSHOT", "") + "-" + buildNumber + "." + a.extension)
+        if (build.exists()) {
+          build.delete()
+        }
+        Files.copy(file, build)
+        log.info(s"Build ${build.getAbsolutePath}")
+        build
+      } else {
+        log.warn(s"Cannot find ${file.getName},build snapshot is aborted.")
+        file
+      }
     }
   }
 
   private def webappPrepareTask =
     Def.task {
       // 1. copy src/main/webapp to target/webapp
-      val webappTarget = assembleWebapp(webappPrepare / target, "webapp").value
+      val webappTarget = assembleWebapp(warPrepare / target, "webapp").value
       val log = streams.value.log
       // 1.1 generate default web.xml and dependencies file
       if (warAddDefaultWebxml.value) prepareWebxml(webappTarget, log)
@@ -154,9 +201,9 @@ object WarPlugin extends AutoPlugin {
    * @param cacheName
    * @return
    */
-  private def assembleWebapp(webappTarget: SettingKey[File], cacheName: String) =
+  private def assembleWebapp(webappTarget: SettingKey[File], cacheName: String): Def.Initialize[Task[File]] = {
     Def.task {
-      val webappSrcDir = (webappPrepare / sourceDirectory).value //src/main/webapp
+      val webappSrcDir = (warPrepare / sourceDirectory).value //src/main/webapp
       Utils.cacheify(
         cacheName,
         { in =>
@@ -171,5 +218,33 @@ object WarPlugin extends AutoPlugin {
       )
       webappTarget.value
     }
+  }
 
+  private def calcWarDiff(m2Root: String, m: sbt.librarymanagement.ModuleID, oldVersion: String,
+                          newVersion: String, crossTargetDir: String, sbv: String, log: util.Logger): Unit = {
+    val aname = artifactName(m, sbv)
+    val oldWar = new File(Dependency.m2Path(m2Root, m.organization, aname, oldVersion, ".war"))
+    val newWar = new File(Dependency.m2Path(m2Root, m.organization, aname, newVersion, ".war"))
+
+    if (!oldWar.exists) {
+      log.error(s"Cannot find ${oldWar.getPath}")
+    } else if (!newWar.exists) {
+      log.error(s"Cannot find ${newWar.getPath}")
+    } else {
+      val diffFile = new File(Dependency.m2DiffPath(m2Root, m.organization, aname, oldVersion, newVersion, ".war"))
+      log.info(s"Generating diff file ${diffFile.getPath}")
+      Bsdiff.diff(oldWar, newWar, diffFile)
+      import Files./
+      Files.copy(diffFile, new File(crossTargetDir + / + diffFile.getName))
+      log.info(s"Generated ${crossTargetDir}${/}${diffFile.getName}(${diffFile.length / 1000.0}KB)")
+    }
+  }
+
+  private def artifactName(m: sbt.librarymanagement.ModuleID, sbv: String): String = {
+    m.crossVersion match {
+      case sbt.librarymanagement.Disabled => m.name
+      case _: sbt.librarymanagement.Binary => m.name + "_" + sbv
+      case _ => m.name
+    }
+  }
 }
