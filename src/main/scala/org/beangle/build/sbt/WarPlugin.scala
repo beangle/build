@@ -27,6 +27,7 @@ import java.io.{File, FileInputStream, FileOutputStream}
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.jar.Manifest
+import scala.collection.mutable
 
 /** Support webapp packaging,snapshot and diff
  */
@@ -47,11 +48,34 @@ object WarPlugin extends AutoPlugin {
 
   private def manifestOptions =
     Def.task {
-      val opt = (packageBin / packageOptions).value
-      opt.filter {
+      val opt = (pkg / packageOptions).value
+      val rest = opt.filter {
         case _: Package.ManifestAttributes => true
         case _ => false
       }
+      val attributes = new mutable.ArrayBuffer[(String, String)]
+      attributes ++= Seq(
+        "Bundle-SymbolicName" -> (projectID.value.organization + "." + moduleName.value),
+        "Bundle-Name" -> moduleName.value,
+        "Bundle-Vendor" -> organizationName.value,
+        "Bundle-Description" -> description.value,
+        "Bundle-Version" -> version.value,
+
+        "Specification-Title" -> moduleName.value,
+        "Specification-Version" -> version.value,
+        "Specification-Vendor" -> organizationName.value,
+
+        "Implementation-Title" -> moduleName.value,
+        "Implementation-Version" -> version.value,
+        "Implementation-Vendor" -> organizationName.value,
+        "Implementation-Vendor-Id" -> projectID.value.organization,
+
+        "Build-Scala-Spec"-> scalaVersion.value
+      )
+      if (licenses.value.nonEmpty) {
+        attributes += "Bundle-License" -> licenses.value.head._1
+      }
+      rest ++ Seq(Package.ManifestAttributes(attributes.toList: _*))
     }
 
   override def projectSettings: Seq[Setting[_]] = {
