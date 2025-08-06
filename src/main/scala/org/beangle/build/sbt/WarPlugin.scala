@@ -100,22 +100,27 @@ object WarPlugin extends AutoPlugin {
 
   private def warBuildTask = {
     Def.task {
+      val log = streams.value.log
       val a = (Compile / Keys.`package` / artifact).value
       val dir = (warBuild / target).value.getAbsolutePath + "/"
       val file = new File(dir + a.name + "-" + version.value + "." + a.extension)
-      val log = streams.value.log
-      if (file.exists()) {
-        val formater = DateTimeFormatter.ofPattern("yyyyMMdd.HHmmss")
-        val buildNumber = formater.format(LocalDateTime.now) + "-1"
-        val build = new File(dir + a.name + "-" + version.value.replace("-SNAPSHOT", "") + "-" + buildNumber + "." + a.extension)
-        if (build.exists()) {
-          build.delete()
+      if (version.value.contains("SNAPSHOT") && a.extension == "war") {
+        if (file.exists()) {
+          val formater = DateTimeFormatter.ofPattern("yyyyMMdd.HHmmss")
+          val buildNumber = formater.format(LocalDateTime.now) + "-1"
+          val build = new File(dir + a.name + "-" + version.value.replace("-SNAPSHOT", "") + "-" + buildNumber + "." + a.extension)
+          if (build.exists()) {
+            build.delete()
+          }
+          Files.copy(file, build)
+          log.info(s"Build ${build.getAbsolutePath}")
+          build
+        } else {
+          log.warn(s"Cannot find ${file.getName},build snapshot is aborted.")
+          file
         }
-        Files.copy(file, build)
-        log.info(s"Build ${build.getAbsolutePath}")
-        build
       } else {
-        log.warn(s"Cannot find ${file.getName},build snapshot is aborted.")
+        log.warn(s"Only supports webapp with SNAPSHOT version.")
         file
       }
     }
