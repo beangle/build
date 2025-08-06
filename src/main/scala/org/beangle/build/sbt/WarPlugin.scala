@@ -28,6 +28,8 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.jar.Manifest
 
+/** Support webapp packaging,snapshot and diff
+ */
 object WarPlugin extends AutoPlugin {
 
   import Keys.`package` as pkg
