@@ -24,8 +24,6 @@ import sbt.Def.taskKey
 import sbt.Keys.*
 
 import java.io.{File, FileInputStream, FileOutputStream}
-import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
 import java.util.jar.Manifest
 import scala.collection.mutable
 
@@ -39,7 +37,6 @@ object WarPlugin extends AutoPlugin {
     lazy val warPrepare = taskKey[Seq[(File, String)]]("prepare webapp contents for packaging")
     lazy val warAddDefaultWebxml = settingKey[Boolean]("add default web.xml when nessesary")
     val warDiff = inputKey[Unit]("Generate war diff")
-    lazy val warBuild = taskKey[File]("build snapshot with timestamp war")
   }
 
   import autoImport.*
@@ -70,7 +67,7 @@ object WarPlugin extends AutoPlugin {
         "Implementation-Vendor" -> organizationName.value,
         "Implementation-Vendor-Id" -> projectID.value.organization,
 
-        "Build-Scala-Spec"-> scalaVersion.value
+        "Build-Scala-Spec" -> scalaVersion.value
       )
       if (licenses.value.nonEmpty) {
         attributes += "Bundle-License" -> licenses.value.head._1
@@ -105,8 +102,6 @@ object WarPlugin extends AutoPlugin {
             }
           }
         },
-        warBuild := warBuildTask.value,
-        warBuild := warBuild.dependsOn(pkg).value,
         warAddDefaultWebxml := true)
   }
 
@@ -119,34 +114,6 @@ object WarPlugin extends AutoPlugin {
       IOs.copy(getClass.getResourceAsStream("/org/beangle/build/web/web.xml"), os)
       IOs.close(os)
       log.info(s"Append default web.xml ${webxml.getAbsolutePath}")
-    }
-  }
-
-  private def warBuildTask = {
-    Def.task {
-      val log = streams.value.log
-      val a = (Compile / Keys.`package` / artifact).value
-      val dir = (warBuild / target).value.getAbsolutePath + "/"
-      val file = new File(dir + a.name + "-" + version.value + "." + a.extension)
-      if (version.value.contains("SNAPSHOT") && a.extension == "war") {
-        if (file.exists()) {
-          val formater = DateTimeFormatter.ofPattern("yyyyMMdd.HHmmss")
-          val buildNumber = formater.format(LocalDateTime.now) + "-1"
-          val build = new File(dir + a.name + "-" + version.value.replace("-SNAPSHOT", "") + "-" + buildNumber + "." + a.extension)
-          if (build.exists()) {
-            build.delete()
-          }
-          Files.copy(file, build)
-          log.info(s"Build ${build.getAbsolutePath}")
-          build
-        } else {
-          log.warn(s"Cannot find ${file.getName},build snapshot is aborted.")
-          file
-        }
-      } else {
-        log.warn(s"Only supports webapp with SNAPSHOT version.")
-        file
-      }
     }
   }
 

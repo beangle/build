@@ -27,7 +27,7 @@ ThisBuild / publishTo := {
   else Some("releases" at nexus + "service/local/staging/deploy/maven2")
 }
 
-val apache_commons_compress = "org.apache.commons" % "commons-compress" % "1.27.1"
+val apache_commons_compress = "org.apache.commons" % "commons-compress" % "1.28.0"
 
 lazy val root = (project in file("."))
   .enablePlugins(SbtPlugin)
