@@ -18,8 +18,7 @@ object BuildSettings {
 
     versionScheme := Some("early-semver"),
     pomIncludeRepository := { _ => false }, // Remove all additional repository other than Maven Central from POM
-    publishTo := {
-      val nexus = "https://oss.sonatype.org/"
-      Some("releases" at nexus + "service/local/staging/deploy/maven2")
-    })
+    credentials += Credentials(Path.userHome / ".sbt" / "sonatype_central_credentials"),
+    publishTo := localStaging.value
+  )
 }

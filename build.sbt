@@ -20,13 +20,6 @@ ThisBuild / developers := List(
   )
 )
 
-ThisBuild / credentials += Credentials(Path.userHome / ".sbt" / "sonatype_credentials")
-ThisBuild / publishTo := {
-  val nexus = "https://oss.sonatype.org/"
-  if (isSnapshot.value) Some("snapshots" at nexus + "content/repositories/snapshots")
-  else Some("releases" at nexus + "service/local/staging/deploy/maven2")
-}
-
 val apache_commons_compress = "org.apache.commons" % "commons-compress" % "1.28.0"
 
 lazy val root = (project in file("."))
