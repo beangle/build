@@ -32,7 +32,8 @@ object SnapshotPlugin extends sbt.AutoPlugin {
     Seq(
       snapshotBuild := buildTask.value,
       snapshotUpload := uploadTask.value,
-      snapshotCredentials := Path.userHome / ".sbt" / "snapshot_credentials"
+      snapshotCredentials := Path.userHome / ".sbt" / "snapshot_credentials",
+      snapshotRepoUrl := "unknown-url"
     )
   }
 
@@ -69,9 +70,11 @@ object SnapshotPlugin extends sbt.AutoPlugin {
       val log = streams.value.log
       var url = snapshotRepoUrl.value
       val credentials = snapshotCredentials.value
-
       val file = buildTask.value
-      if (null != file) {
+
+      if (url == "unknown-url") {
+        log.error(s"set snapshotRepoUrl := http://server/path/to/upload first.")
+      } else if (null != file) {
         var user: String = null
         var password: String = null
         if (null != credentials) {
