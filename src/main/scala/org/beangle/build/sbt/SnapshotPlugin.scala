@@ -105,7 +105,12 @@ object SnapshotPlugin extends sbt.AutoPlugin {
   private def upload(url: URL, file: File, user: String, password: String): (Int, Any) = {
     val conn = url.openConnection.asInstanceOf[HttpURLConnection]
     Https.noverify(conn)
+    conn.setUseCaches(false)
+    conn.setRequestProperty("Connection", "close")
+    conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+
     conn.setDoOutput(true)
+    conn.setDoInput(true)
     conn.setConnectTimeout(10 * 1000)
     conn.setReadTimeout(10 * 1000)
     conn.setRequestMethod("POST")
@@ -114,14 +119,14 @@ object SnapshotPlugin extends sbt.AutoPlugin {
     if (null != user) {
       conn.addRequestProperty("Authorization", "Basic " + Base64.getEncoder.encodeToString(s"${user}:${password}".getBytes))
     }
-    val os = conn.getOutputStream
-    IOs.copy(new FileInputStream(file), os)
-    os.close() //don't forget to close the OutputStream
     try {
-      conn.connect()
+      val os = conn.getOutputStream
+      IOs.copy(new FileInputStream(file), os)
+      os.close() //don't forget to close the OutputStream
+      val code = conn.getResponseCode
       val bos = new ByteArrayOutputStream
       IOs.copy(conn.getInputStream, bos)
-      (conn.getResponseCode, bos.toByteArray)
+      (code, bos.toByteArray)
     } catch {
       case e: Exception =>
         println("Cannot open url " + url + " " + e.getMessage)
