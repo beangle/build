@@ -43,7 +43,7 @@ object SnapshotPlugin extends sbt.AutoPlugin {
       val a = (Compile / Keys.`package` / artifact).value
       val dir = (snapshotBuild / target).value.getAbsolutePath + "/"
       val file = new File(dir + a.name + "-" + version.value + "." + a.extension)
-      if (version.value.contains("SNAPSHOT") && (a.extension == "war" || a.extension == ".jar")) {
+      if (version.value.contains("SNAPSHOT") && (a.extension == "war" || a.extension == "jar")) {
         if (file.exists()) {
           val formater = DateTimeFormatter.ofPattern("yyyyMMdd.HHmmss")
           val buildNumber = formater.format(LocalDateTime.now) + "-1"
