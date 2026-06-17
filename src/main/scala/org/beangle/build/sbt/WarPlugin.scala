@@ -81,6 +81,8 @@ object WarPlugin extends AutoPlugin {
       addArtifact(Compile / pkg / artifact, pkg) ++
       Seq(pkg / packageOptions ++= manifestOptions.value) ++
       Seq(
+        // WAR 项目只发布 war，不发布 classes 打成的 jar
+        Compile / packageBin / publishArtifact := false,
         (warPrepare / sourceDirectory) := (Compile / sourceDirectory).value / "webapp",
         (warPrepare / target) := (Compile / target).value / "webapp",
         warPrepare := webappPrepareTask.value,
