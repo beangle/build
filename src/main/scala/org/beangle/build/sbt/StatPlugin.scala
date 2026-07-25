@@ -2,8 +2,8 @@
  * Copyright © 2005, The Beangle Software.
  *
  * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
+ * it under the terms of the GNU Lesser General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -17,11 +17,11 @@
 
 package org.beangle.build.sbt
 
+import org.beangle.build.stat.SlocStat
+import org.beangle.build.util.Strings
 import sbt.Keys.{baseDirectory, name, streams}
 import sbt.{Compile, Def, Test, inConfig, taskKey}
 
-import org.beangle.build.stat.SlocStat
-import org.beangle.build.util.Strings
 import scala.collection.mutable
 
 object StatPlugin extends sbt.AutoPlugin {
@@ -29,39 +29,36 @@ object StatPlugin extends sbt.AutoPlugin {
   object autoImport {
     val statSloc = taskKey[Unit]("Stat line of code")
 
-    lazy val baseStatSettings: Seq[Def.Setting[_]] = Seq(
+    lazy val baseStatSettings: Seq[Def.Setting[?]] = Seq(
       statSloc := statSlocTask.value
     )
   }
 
-  import autoImport._
+  import autoImport.*
 
   override def trigger = allRequirements
 
-  // a group of settings that are automatically added to projects.
   override val projectSettings =
     inConfig(Compile)(baseStatSettings) ++
       inConfig(Test)(baseStatSettings)
 
   lazy val statSlocTask =
     Def.task {
-      val log = streams.value.log
       val stats = new mutable.HashMap[String, Int]
-      log.debug("stating sloc in " + baseDirectory.value)
+      streams.value.log.debug("stating sloc in " + baseDirectory.value)
       SlocStat.countDir(baseDirectory.value, stats, Set("target"))
       var sum = 0
       val rs = stats.toList.sortBy(_._2).reverse
       var maxLength = 0
       rs foreach {
-        case (e, c) => {
+        case (e, c) =>
           if (e.length > maxLength) maxLength = e.length
           sum += c
-        }
       }
 
-      log.info(s"${name.value} has $sum lines.")
+      streams.value.log.info(s"${name.value} has $sum lines.")
       rs foreach { t =>
-        log.info(Strings.leftPad(t._1, maxLength, ' ') + "  " + t._2)
+        streams.value.log.info(Strings.leftPad(t._1, maxLength, ' ') + "  " + t._2)
       }
     }
 }

@@ -34,7 +34,7 @@ object WarPlugin extends AutoPlugin {
   import Keys.`package` as pkg
 
   object autoImport {
-    lazy val warPrepare = taskKey[Seq[(File, String)]]("prepare webapp contents for packaging")
+    lazy val warPrepare = taskKey[Seq[(HashedVirtualFileRef, String)]]("prepare webapp contents for packaging")
     lazy val warAddDefaultWebxml = settingKey[Boolean]("add default web.xml when nessesary")
     val warDiff = inputKey[Unit]("Generate war diff")
   }
@@ -47,8 +47,8 @@ object WarPlugin extends AutoPlugin {
     Def.task {
       val opt = (pkg / packageOptions).value
       val rest = opt.filter {
-        case _: Package.ManifestAttributes => true
-        case _ => false
+        case _: PackageOption.ManifestAttributes => false
+        case _ => true
       }
       val attributes = new mutable.ArrayBuffer[(String, String)]
       attributes ++= Seq(
@@ -70,28 +70,29 @@ object WarPlugin extends AutoPlugin {
         "Build-Scala-Spec" -> scalaVersion.value
       )
       if (licenses.value.nonEmpty) {
-        attributes += "Bundle-License" -> licenses.value.head._1
+        attributes += "Bundle-License" -> Utils.licenseSpdxId(licenses.value.head)
       }
-      rest ++ Seq(Package.ManifestAttributes(attributes.toList: _*))
+      rest ++ Seq(PackageOption.ManifestAttributes(attributes.toList.map { case (k, v) =>
+        new java.util.jar.Attributes.Name(k) -> v
+      }*))
     }
 
-  override def projectSettings: Seq[Setting[_]] = {
+  override def projectSettings: Seq[Setting[?]] = {
     Defaults.packageTaskSettings(pkg, warPrepare) ++
       Seq(pkg / artifact := Artifact(moduleName.value, "war", "war")) ++
       addArtifact(Compile / pkg / artifact, pkg) ++
-      Seq(pkg / packageOptions ++= manifestOptions.value) ++
+      Seq(pkg / packageOptions := Def.uncached((pkg / packageOptions).value ++ manifestOptions.value)) ++
       Seq(
-        // WAR 项目只发布 war，不发布 classes 打成的 jar
         Compile / packageBin / publishArtifact := false,
         (warPrepare / sourceDirectory) := (Compile / sourceDirectory).value / "webapp",
         (warPrepare / target) := (Compile / target).value / "webapp",
-        warPrepare := webappPrepareTask.value,
-        warDiff := {
+        warPrepare := Def.uncached(webappPrepareTask.value),
+        warDiff := Def.uncached {
           val a = (Compile / Keys.`package` / artifact).value
+          val log = streams.value.log
           if (a.extension == "war") {
             import complete.DefaultParsers.*
             val args = spaceDelimited("<arg>").parsed
-            val log = streams.value.log
             if (args.size < 1) {
               log.error("usage:warDiff oldVersion [newVersion]")
             } else {
@@ -121,30 +122,28 @@ object WarPlugin extends AutoPlugin {
 
   private def webappPrepareTask =
     Def.task {
-      // 1. copy src/main/webapp to target/webapp
-      val webappTarget = assembleWebapp(warPrepare / target, "webapp").value
+      val converter = fileConverter.value
+      given FileConverter = converter
+      val cacheDir = (Compile / target).value / "cache"
       val log = streams.value.log
-      // 1.1 generate default web.xml and dependencies file
+      val webappTarget = assembleWebapp(warPrepare / target, "webapp").value
       if (warAddDefaultWebxml.value) prepareWebxml(webappTarget, log)
 
-      // 2. copy project's classes to WEB-INF/classes
       val m = (Compile / packageBin / mappings).value
+      val mFiles = m.map { case (ref, path) => converter.toPath(ref).toFile -> path }
       val webInfDir = webappTarget / "WEB-INF"
       val webappLibDir = webInfDir / "lib"
 
-      val taskStreams = streams.value
       Utils.cacheify(
         "classes",
         { in =>
-          m find (_._1 == in) map (webInfDir / "classes" / _._2)
+          mFiles find (_._1 == in) map (webInfDir / "classes" / _._2)
         },
-        (m filter (!_._1.isDirectory) map (_._1)).toSet,
-        taskStreams
+        (mFiles filter (!_._1.isDirectory) map (_._1)).toSet,
+        cacheDir
       )
 
-      //2.2 generate and copy dependencies
-      val dependencyFile = BootPlugin.bootDependenciesTask.value
-      dependencyFile foreach { df =>
+      BootPlugin.autoImport.bootDependencies.value foreach { df =>
         val beangleDir = s"${webInfDir.getAbsolutePath}/classes/META-INF/beangle"
         new File(beangleDir).mkdirs()
         val is = new FileInputStream(df)
@@ -153,20 +152,16 @@ object WarPlugin extends AutoPlugin {
         IOs.close(os)
       }
 
-      // 3. create .jar files for depended-on projects
       val classpath = (Runtime / fullClasspath).value
+      val packaged = (Compile / packageBin / packagedArtifact).value._1
       if (version.value.contains("SNAPSHOT")) {
         for {
           cpItem <- classpath.toList
-          dir = cpItem.data
+          dir = Utils.file(cpItem)
           if dir.isDirectory
-          artEntry <- cpItem.metadata.entries find { e =>
-            e.key.label == "artifact"
-          }
-          cpArt = artEntry.value.asInstanceOf[Artifact]
-          artifact = (Compile / packageBin / packagedArtifact).value._1
-          if cpArt != artifact
-          files = (dir ** "*").get flatMap { file =>
+          cpArt <- Utils.artifact(cpItem)
+          if cpArt != packaged
+          files = (dir ** "*").get() flatMap { file =>
             if (!file.isDirectory)
               IO.relativize(dir, file) map { p => (file, p) }
             else
@@ -181,29 +176,23 @@ object WarPlugin extends AutoPlugin {
         } yield ()
       }
 
-      // 4. copy SNAPSHOT dependency libraries to WEB-INF/lib
       Utils.cacheify(
         "lib-deps",
         { in => Some(webappTarget / "WEB-INF" / "lib" / in.getName) },
-        classpath.map(_.data).toSet filter { in =>
+        classpath.map(Utils.file(_)).toSet filter { in =>
           !in.isDirectory && in.getAbsolutePath.contains("-SNAPSHOT") && in.getName.endsWith(".jar")
         },
-        taskStreams
+        cacheDir
       )
 
-      (webappTarget ** "*") pair (Path.relativeTo(webappTarget) | Path.flat)
+      val fileMappings = (webappTarget ** "*") pair (Path.relativeTo(webappTarget) | Path.flat)
+      fileMappings.map { case (file, path) => converter.toVirtualFile(file.toPath) -> path }
     }
 
-  /** assemble web files
-   * copy src/main/webapp to target/webapp
-   *
-   * @param webappTarget target/webapp
-   * @param cacheName
-   * @return
-   */
   private def assembleWebapp(webappTarget: SettingKey[File], cacheName: String): Def.Initialize[Task[File]] = {
     Def.task {
-      val webappSrcDir = (warPrepare / sourceDirectory).value //src/main/webapp
+      val cacheDir = (Compile / target).value / "cache"
+      val webappSrcDir = (warPrepare / sourceDirectory).value
       Utils.cacheify(
         cacheName,
         { in =>
@@ -213,8 +202,8 @@ object WarPlugin extends AutoPlugin {
             r <- IO.relativizeFile(webappSrcDir, f)
           } yield IO.resolve(webappTarget.value, r)
         },
-        (webappSrcDir ** "*").get.toSet,
-        streams.value
+        (webappSrcDir ** "*").get().toSet,
+        cacheDir
       )
       webappTarget.value
     }

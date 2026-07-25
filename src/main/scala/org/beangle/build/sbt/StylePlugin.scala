@@ -18,15 +18,13 @@
 package org.beangle.build.sbt
 
 import org.beangle.build.style.Style
-import org.beangle.build.style.license._
+import org.beangle.build.style.license.*
 import org.beangle.build.style.ws.WsOptions
-import sbt.Keys._
-import sbt._
+import sbt.Keys.*
+import sbt.*
 
-import java.net.URL
-import java.util.jar.Attributes
+import java.io.{File as JFile}
 import scala.collection.mutable
-
 
 object StylePlugin extends sbt.AutoPlugin {
 
@@ -39,49 +37,46 @@ object StylePlugin extends sbt.AutoPlugin {
     val headerEmptyLine: SettingKey[Boolean] =
       settingKey("An empty line should be added between the header and the body")
 
-    lazy val styleSettings: Seq[Def.Setting[_]] = Seq(
-      styleCheck := checkTask.value,
-      styleFormat := formatTask.value,
-      packageBin / packageOptions += Package.ManifestAttributes(new java.util.jar.Attributes.Name("Bundle-License") -> licenseName(licenses.value).getOrElse("UNKNOWN")),
-      compile := compile.dependsOn(autoImport.styleCheck).value
+    lazy val styleTaskSettings: Seq[Def.Setting[?]] = Seq(
+      styleCheck := Def.uncached(checkTask.value),
+      styleFormat := Def.uncached(formatTask.value)
+    )
+
+    lazy val styleCompileSettings: Seq[Def.Setting[?]] = Seq(
+      packageBin / packageOptions ++= Def.uncached {
+        Seq(PackageOption.ManifestAttributes(new java.util.jar.Attributes.Name("Bundle-License") -> licenseName(licenses.value).getOrElse("UNKNOWN")))
+      },
+      Compile / compile := Def.uncached((Compile / compile).dependsOn(Compile / styleCheck).value),
+      Test / compile := Def.uncached((Test / compile).dependsOn(Test / styleCheck).value)
     )
   }
 
-  import autoImport._
+  import autoImport.*
 
   override def globalSettings = Seq(headerEmptyLine := true)
 
   override def trigger = allRequirements
 
-  // a group of settings that are automatically added to projects.
-  override val projectSettings = inConfig(Compile)(styleSettings) ++ inConfig(Test)(styleSettings)
+  override val projectSettings =
+    inConfig(Compile)(styleTaskSettings) ++
+      inConfig(Test)(styleTaskSettings) ++
+      styleCompileSettings
 
   lazy val formatTask =
     Def.task {
-      val log = streams.value.log
       val license = detectLicenseHeader(licenses.value.toList, organizationName.value,
         startYear.value.map(_.toString), licenseRepo)
-      val sources = new mutable.ArrayBuffer[File]
-      sources ++= (Compile / unmanagedSourceDirectories).value
-      sources ++= (Test / unmanagedSourceDirectories).value
-      sources ++= (Compile / unmanagedResourceDirectories).value
-      sources ++= (Test / unmanagedResourceDirectories).value
-      log.info("style formatting for " + name.value)
+      val sources = sourceDirs.value
+      streams.value.log.info("style formatting for " + name.value)
       Style.format(sources, None, WsOptions.Default, LicenseOptions(license, headerEmptyLine.value))
-      (packageBin / packageOptions) += Package.ManifestAttributes(new Attributes.Name("Bundle-License") -> license)
     }
 
   lazy val checkTask =
     Def.task {
       val license = detectLicenseHeader(licenses.value.toList, organizationName.value,
         startYear.value.map(_.toString), licenseRepo)
-      val log = streams.value.log
-      val sources = new mutable.ArrayBuffer[File]
-      sources ++= (Compile / unmanagedSourceDirectories).value
-      sources ++= (Test / unmanagedSourceDirectories).value
-      sources ++= (Compile / unmanagedResourceDirectories).value
-      sources ++= (Test / unmanagedResourceDirectories).value
-      log.info("style checking for " + name.value)
+      val sources = sourceDirs.value
+      streams.value.log.info("style checking for " + name.value)
       val warns = Style.check(sources, LicenseOptions(license, headerEmptyLine.value))
       if (warns.nonEmpty) {
         throw new MessageOnlyException(
@@ -90,24 +85,32 @@ object StylePlugin extends sbt.AutoPlugin {
               |""".stripMargin
         )
       }
-      //copy license to classes/META-INF
       if (sources.nonEmpty) {
-        val base = new File(loadedBuild.value.root)
+        val base = new JFile(loadedBuild.value.root)
         licenseName(licenses.value) foreach { ln =>
           val copied = Licenses.copyLicense(base, crossTarget.value, licenseRepo, ln)
-          if (!copied) log.warn(s"Missing license text of ${ln}")
+          if (!copied) streams.value.log.warn(s"Missing license text of ${ln}")
         }
       }
     }
 
-  def licenseName(licenses: Seq[(String, URL)]): Option[String] = {
+  private def sourceDirs: Def.Initialize[Task[Seq[JFile]]] = Def.task {
+    val dirs = new mutable.ArrayBuffer[JFile]
+    dirs ++= (Compile / unmanagedSourceDirectories).value
+    dirs ++= (Test / unmanagedSourceDirectories).value
+    dirs ++= (Compile / unmanagedResourceDirectories).value
+    dirs ++= (Test / unmanagedResourceDirectories).value
+    dirs.toSeq
+  }
+
+  def licenseName(licenses: Seq[sbt.librarymanagement.License]): Option[String] = {
     licenses match {
-      case (name, _) :: Nil => Some(name)
+      case license :: Nil => Some(Utils.licenseSpdxId(license))
       case _ => None
     }
   }
 
-  def detectLicenseHeader(licenses: Seq[(String, URL)], owner: String, startYear: Option[String], repos: Licenses): String = {
+  def detectLicenseHeader(licenses: Seq[sbt.librarymanagement.License], owner: String, startYear: Option[String], repos: Licenses): String = {
     val l = for {
       name <- licenseName(licenses)
       year <- startYear

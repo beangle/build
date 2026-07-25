@@ -17,28 +17,38 @@
 
 package org.beangle.build.sbt
 
-import sbt.Keys._
-import sbt._
+import sbt.*
+import sbt.Keys.*
 import sbt.util.CacheStoreFactory
 import sbt.util.FilesInfo.{exists, lastModified}
+import sbtcompat.PluginCompat.{parseArtifactStrAttribute, parseModuleIDStrAttribute, toFile as attributedToFile}
+
+import java.io.File as JFile
 
 object Utils {
 
-  def jar(sources: Traversable[(File, String)], outputJar: File, manifest: java.util.jar.Manifest): Unit =
-    io.IO.jar(sources, outputJar, manifest, None)
+  def jar(sources: Traversable[(JFile, String)], outputJar: JFile, manifest: java.util.jar.Manifest): Unit =
+    IO.jar(sources, outputJar, manifest, None)
 
-  def cacheify(name: String, dest: File => Option[File], in: Set[File], streams: TaskStreams): Set[File] = {
-    sbt.util.FileFunction.
-      cached(CacheStoreFactory(streams.cacheDirectory / "beangle-war-plugin" / name), lastModified, exists)({ (incs, outcs) =>
-        // toss out removed files
+  def file(entry: Attributed[?])(using converter: FileConverter): JFile =
+    attributedToFile(entry.asInstanceOf[Attributed[sbtcompat.PluginCompat.FileRef]])
+
+  def moduleId(entry: Attributed[?]): Option[sbt.librarymanagement.ModuleID] =
+    entry.metadata.get(moduleIDStr).map(parseModuleIDStrAttribute)
+
+  def artifact(entry: Attributed[?]): Option[sbt.librarymanagement.Artifact] =
+    entry.metadata.get(artifactStr).map(parseArtifactStrAttribute)
+
+  def licenseSpdxId(license: sbt.librarymanagement.License): String =
+    license.asInstanceOf[Product].productElement(0).asInstanceOf[String]
+
+  def cacheify(name: String, dest: JFile => Option[JFile], in: Set[JFile], cacheDir: JFile): Set[JFile] = {
+    sbt.util.FileFunction
+      .cached(CacheStoreFactory(cacheDir / "beangle-war-plugin" / name), lastModified, exists)({ (incs, outcs) =>
         for (removed <- incs.removed; toRemove <- dest(removed)) yield IO.delete(toRemove)
-        // new files
         val newFiles = for (in <- incs.added -- incs.removed; out <- dest(in); _ = IO.copyFile(in, out)) yield out
-        // modified files
         val modifieds = for (in <- incs.modified -- incs.removed; out <- dest(in); _ = IO.copyFile(in, out)) yield out
-        // missing files
         val missings = for (in <- incs.checked -- incs.removed; out <- dest(in).toSet & outcs.modified; _ = IO.copyFile(in, out)) yield out
-        // all files
         newFiles ++ modifieds ++ missings
       })
       .apply(in)

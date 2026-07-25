@@ -11,14 +11,14 @@ import java.net.{HttpURLConnection, URI}
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Base64
-import scala.jdk.CollectionConverters.propertiesAsScalaMapConverter
+import scala.jdk.CollectionConverters.PropertiesHasAsScala
 
 /** 开发快照版支持
  */
 object SnapshotPlugin extends sbt.AutoPlugin {
 
   object autoImport {
-    lazy val snapshotBuild = taskKey[File]("Build snapshot war with timestamp")
+    lazy val snapshotBuild = taskKey[Option[File]]("Build snapshot war with timestamp")
     lazy val snapshotUpload = taskKey[Unit]("Upload snapshot war to repo")
     lazy val snapshotCredentials = taskKey[File]("Credential to snapshot repo")
     lazy val snapshotRepoUrl: SettingKey[String] = settingKey("Snapshot repository url.")
@@ -28,11 +28,11 @@ object SnapshotPlugin extends sbt.AutoPlugin {
 
   override def trigger = allRequirements
 
-  override def projectSettings: Seq[Setting[_]] = {
+  override def projectSettings: Seq[Setting[?]] = {
     Seq(
-      snapshotBuild := buildTask.value,
-      snapshotUpload := uploadTask.value,
-      snapshotCredentials := Path.userHome / ".sbt" / "snapshot_credentials",
+      snapshotBuild := Def.uncached(buildTask.value),
+      snapshotUpload := Def.uncached(uploadTask.value),
+      snapshotCredentials := Def.uncached(Path.userHome / ".sbt" / "snapshot_credentials"),
       snapshotRepoUrl := "unknown-url"
     )
   }
@@ -53,14 +53,14 @@ object SnapshotPlugin extends sbt.AutoPlugin {
           }
           Files.copy(file, build)
           log.info(s"Build ${build.getAbsolutePath}")
-          build
+          Some(build)
         } else {
           log.warn(s"Cannot find ${file.getName},build snapshot is aborted.")
-          null
+          None
         }
       } else {
         log.warn(s"Only supports war/jar with SNAPSHOT version.")
-        null
+        None
       }
     }
   }
@@ -70,33 +70,35 @@ object SnapshotPlugin extends sbt.AutoPlugin {
       val log = streams.value.log
       var url = snapshotRepoUrl.value
       val credentials = snapshotCredentials.value
-      val file = buildTask.value
+      val file = snapshotBuild.value
 
       if (url == "unknown-url") {
         log.error(s"set snapshotRepoUrl := http://server/path/to/upload first.")
-      } else if (null != file) {
-        var user: String = null
-        var password: String = null
-        if (null != credentials) {
-          val properties = new java.util.Properties
-          IO.load(properties, credentials)
-          val cp = properties.asScala.map { case (k, v) => (k, v.trim) }.toMap
+      } else {
+        file foreach { f =>
+          var user: String = null
+          var password: String = null
+          if (null != credentials) {
+            val properties = new java.util.Properties
+            IO.load(properties, credentials)
+            val cp = properties.asScala.map { case (k, v) => (k, v.trim) }.toMap
 
-          if (!cp.contains("user") || !cp.contains("password")) {
-            log.warn(s"Cannot find user or password from properties file ${credentials}")
-          } else {
-            user = cp("user")
-            password = cp("password")
+            if (!cp.contains("user") || !cp.contains("password")) {
+              log.warn(s"Cannot find user or password from properties file ${credentials}")
+            } else {
+              user = cp("user")
+              password = cp("password")
+            }
           }
-        }
-        url = Strings.replace(url, "{fileName}", file.getName)
-        log.info(s"Uploading to ${url}")
+          url = Strings.replace(url, "{fileName}", f.getName)
+          log.info(s"Uploading to ${url}")
 
-        val rs = upload(URI.create(url).toURL, file, user, password)
-        if (rs._1 == 200) {
-          log.info("Upload success")
-        } else {
-          log.error(s"Upload Failed for status is ${rs._1} and reason is ${rs._2}")
+          val rs = upload(URI.create(url).toURL, f, user, password)
+          if (rs._1 == 200) {
+            log.info("Upload success")
+          } else {
+            log.error(s"Upload Failed for status is ${rs._1} and reason is ${rs._2}")
+          }
         }
       }
     }
@@ -122,7 +124,7 @@ object SnapshotPlugin extends sbt.AutoPlugin {
     try {
       val os = conn.getOutputStream
       IOs.copy(new FileInputStream(file), os)
-      os.close() //don't forget to close the OutputStream
+      os.close()
       val code = conn.getResponseCode
       val bos = new ByteArrayOutputStream
       IOs.copy(conn.getInputStream, bos)

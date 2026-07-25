@@ -1,22 +1,22 @@
 import BuildSettings.*
 import sbt.*
 
-ThisBuild / version := "0.0.23-SNAPSHOT"
-ThisBuild / description := "Beangle Build Tools."
-ThisBuild / organization := "org.beangle.build"
-ThisBuild / homepage := Some(url("https://github.com/beangle/build"))
-ThisBuild / scmInfo := Some(
+version := "0.1.0-SNAPSHOT"
+description := "Beangle Build Tools."
+organization := "org.beangle.build"
+homepage := Some(uri("https://github.com/beangle/build"))
+scmInfo := Some(
   ScmInfo(
-    url("https://github.com/beangle/build"),
+    uri("https://github.com/beangle/build"),
     "scm:git@github.com:beangle/build.git"
   )
 )
-ThisBuild / developers := List(
+developers := List(
   Developer(
     id = "duantihua",
     name = "Duan Tihua",
     email = "duantihua@163.com",
-    url = url("https://github.com/duantihua")
+    url = uri("https://github.com/duantihua")
   )
 )
 
@@ -27,5 +27,6 @@ lazy val root = (project in file("."))
   .settings(
     name := "sbt-beangle-build",
     libraryDependencies ++= Seq(apache_commons_compress),
+    addSbtPlugin("com.github.sbt" % "sbt2-compat" % "0.1.0"),
     commonSettings
   )

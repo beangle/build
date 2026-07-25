@@ -1,11 +1,18 @@
 # Beangle Build Tools
 
 ## 引入 sbt plugin
-  使用sbt构建时，在project/plugins.sbt中添加
 
-    addSbtPlugin("org.beangle.build" % "sbt-beangle-build" % "0.0.2")
+使用 sbt 2.x 构建时，在 `project/plugins.sbt` 中添加：
 
-  该开发包有如下及格插件
+    addSbtPlugin("org.beangle.build" % "sbt-beangle-build" % "0.1.0-SNAPSHOT")
+
+并在 `project/build.properties` 中设置：
+
+    sbt.version=2.0.3
+
+> **注意：** 从 0.1.0 起仅支持 sbt 2.x（artifact 后缀为 `_sbt2_3`）。sbt 1.x 项目请继续使用 0.0.x 版本。
+
+该开发包有如下几个插件：
 
 ### 1. StylePlugin 格式检查
 
@@ -30,11 +37,11 @@
 
 ### 3. BootPlugin 生成运行时依赖文件
 
-  在项目的build.sbt中添加如下代码:
+  在项目的 build.sbt 中添加如下代码（WarPlugin 已自动启用 BootPlugin，war 项目可省略）：
 
-    Compile / compile := (Compile / compile).dependsOn(BootPlugin.generateDependenciesTask).value
+    Compile / compile := (Compile / compile).dependsOn(bootDependencies).value
 
-  可自动生成项目运行时依赖文件/META-INF/beangle/dependencies。如果是war项目则可以省去上述配置，简单的启用war插件即可。
+  可自动生成项目运行时依赖文件 `/META-INF/beangle/dependencies`。如果是 war 项目则可以省去上述配置，简单的启用 war 插件即可。
 
     lazy val myproject = (project in file("."))
        .enablePlugins(WarPlugin)

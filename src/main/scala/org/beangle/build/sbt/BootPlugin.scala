@@ -20,9 +20,9 @@ package org.beangle.build.sbt
 import org.beangle.build.boot.Dependency
 import org.beangle.build.util.Files
 import sbt.Keys.*
-import sbt.{File, *}
+import sbt.*
 
-import java.io.{FileWriter, IOException}
+import java.io.{File, FileWriter, IOException}
 import scala.collection.mutable
 
 object BootPlugin extends sbt.AutoPlugin {
@@ -30,13 +30,13 @@ object BootPlugin extends sbt.AutoPlugin {
   val DependenciesFileName = "dependencies"
 
   object autoImport {
-    val bootDependencies = taskKey[Unit]("Generate boot dependencies file")
+    val bootDependencies = taskKey[Option[File]]("Generate boot dependencies file")
     val bootRepo = taskKey[Unit]("Assemble boot dependencies to make a repo")
 
-    lazy val bootSettings: Seq[Def.Setting[_]] = Seq(
-      bootDependencies := bootDependenciesTask.value,
-      bootRepo := bootRepoTask.value,
-      packageBin := packageBin.dependsOn(autoImport.bootDependencies).value
+    lazy val bootSettings: Seq[Def.Setting[?]] = Seq(
+      bootDependencies := Def.uncached(bootDependenciesTask.value),
+      bootRepo := Def.uncached(bootRepoTask.value),
+      Compile / packageBin := Def.uncached((Compile / packageBin).dependsOn(bootDependencies).value)
     )
   }
 
@@ -48,21 +48,27 @@ object BootPlugin extends sbt.AutoPlugin {
 
   lazy val bootDependenciesTask =
     Def.task {
-      val excludeGavs = Set(organization.value + ":" + name.value) ++ findOptionalGavs(libraryDependencies.value) //exclude itself
-      generate(crossTarget.value.getAbsolutePath, (Runtime / fullClasspath).value, scalaBinaryVersion.value,
-        excludeGavs, streams.value.log)
+      given FileConverter = fileConverter.value
+      val excludeGavs = Set(organization.value + ":" + name.value) ++ findOptionalGavs(libraryDependencies.value)
+      generate(
+        crossTarget.value.getAbsolutePath,
+        (Runtime / fullClasspath).value,
+        scalaBinaryVersion.value,
+        excludeGavs,
+        streams.value.log
+      )
     }
 
   lazy val bootRepoTask =
     Def.task {
+      given FileConverter = fileConverter.value
       val build = loadedBuild.value
       val base = new File(build.root) / "target/repository"
-      val isRoot = build.root == baseDirectory.value.toURI
-      val log = streams.value.log
+      val isRoot = baseDirectory.value.getCanonicalFile == new File(build.root).getCanonicalFile
       val excludeGavs = Set(organization.value + ":" + name.value) ++ findOptionalGavs(libraryDependencies.value)
-      assemble(base, (Runtime / fullClasspath).value, scalaBinaryVersion.value, excludeGavs, log)
+      assemble(base, (Runtime / fullClasspath).value, scalaBinaryVersion.value, excludeGavs, streams.value.log)
       if (isRoot) {
-        log.info(s"project repository is generated in ${base}")
+        streams.value.log.info(s"project repository is generated in ${base}")
       }
     }
 
@@ -77,8 +83,8 @@ object BootPlugin extends sbt.AutoPlugin {
     optionals.toSet
   }
 
-  private def generate(target: String, dependencies: collection.Seq[Attributed[File]], sbv: String,
-                       excludeGavs: Set[String], log: util.Logger): Option[File] = {
+  private def generate(target: String, dependencies: collection.Seq[Attributed[?]], sbv: String,
+                       excludeGavs: Set[String], log: util.Logger)(using FileConverter): Option[File] = {
     val folder = target + "/classes/META-INF/beangle"
     new File(folder).mkdirs()
     val file = new File(folder + "/" + DependenciesFileName)
@@ -87,7 +93,7 @@ object BootPlugin extends sbt.AutoPlugin {
       file.createNewFile()
       val results = new collection.mutable.HashSet[String]
       dependencies foreach { d =>
-        d.get(moduleID.key) match {
+        Utils.moduleId(d) match {
           case Some(m) =>
             val gav = m.organization + ":" + m.name
             val scope = m.configurations.getOrElse("compile")
@@ -98,8 +104,8 @@ object BootPlugin extends sbt.AutoPlugin {
         }
       }
       val fw = new FileWriter(file)
-      fw.write(results.toSeq.sorted.mkString("\n"))
-      fw.close()
+      try fw.write(results.toSeq.sorted.mkString("\n"))
+      finally fw.close()
       log.info(s"generated ${results.size} dependencies at " + file.getAbsolutePath)
       Some(file)
     } catch {
@@ -107,18 +113,12 @@ object BootPlugin extends sbt.AutoPlugin {
     }
   }
 
-  /** Assemble dependencies to repository
-   *
-   * @param projectRepoDir
-   * @param dependencies
-   * @param log
-   */
-  private def assemble(projectRepoDir: File, dependencies: collection.Seq[Attributed[File]], sbv: String,
-                       excludeGavs: Set[String], log: util.Logger): Unit = {
+  private def assemble(projectRepoDir: File, dependencies: collection.Seq[Attributed[?]], sbv: String,
+                       excludeGavs: Set[String], log: util.Logger)(using FileConverter): Unit = {
     projectRepoDir.mkdirs()
-    val artifacts = new collection.mutable.ArrayBuffer[Attributed[File]]
+    val artifacts = new collection.mutable.ArrayBuffer[Attributed[?]]
     dependencies foreach { d =>
-      d.get(Keys.moduleID.key) match {
+      Utils.moduleId(d) match {
         case Some(m) =>
           val gav = m.organization + ":" + m.name
           val scope = m.configurations.getOrElse("compile")
@@ -129,14 +129,15 @@ object BootPlugin extends sbt.AutoPlugin {
     copy(artifacts, projectRepoDir, sbv, log)
   }
 
-  private def copy(artifacts: collection.Seq[Attributed[File]], base: File, sbv: String, log: util.Logger): Unit = {
+  private def copy(artifacts: collection.Seq[Attributed[?]], base: File, sbv: String, log: util.Logger)(using FileConverter): Unit = {
     artifacts foreach { artifact =>
       toMavenRepoPath(base.getAbsolutePath, artifact, sbv) foreach { path =>
         val dest = new File(path)
         val destSha1 = new File(path + ".sha1")
-        if (!dest.exists()) Files.copy(artifact.data, dest)
+        val src = Utils.file(artifact)
+        if (!dest.exists()) Files.copy(src, dest)
         if (!destSha1.exists()) {
-          val sha1File = new File(artifact.data.getAbsolutePath + ".sha1")
+          val sha1File = new File(src.getAbsolutePath + ".sha1")
           if (sha1File.exists()) {
             Files.copy(sha1File, new File(path + ".sha1"))
           } else {
@@ -159,8 +160,8 @@ object BootPlugin extends sbt.AutoPlugin {
     }
   }
 
-  private def toMavenRepoPath(base: String, d: Attributed[File], sbv: String): Option[String] = {
-    d.get(Keys.moduleID.key) match {
+  private def toMavenRepoPath(base: String, d: Attributed[?], sbv: String): Option[String] = {
+    Utils.moduleId(d) match {
       case Some(m) => Some(Dependency.m2Path(base, m.organization, artifactName(m, sbv), m.revision))
       case _ => None
     }
