@@ -47,9 +47,9 @@ object DefaultWSFormatter {
   class Builder {
     var tablength = 2
     var eof = EOF.LF
-    private var tab2space: Boolean = _
-    private var trimTrailingWhiteSpace: Boolean = _
-    private var fixLast: Boolean = _
+    private var tab2space: Boolean = false
+    private var trimTrailingWhiteSpace: Boolean = false
+    private var fixLast: Boolean = false
 
     def enableTrimTrailingWhiteSpace(): this.type = {
       trimTrailingWhiteSpace = true
