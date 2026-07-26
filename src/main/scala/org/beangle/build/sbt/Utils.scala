@@ -40,7 +40,7 @@ object Utils {
     entry.metadata.get(artifactStr).map(parseArtifactStrAttribute)
 
   def licenseSpdxId(license: sbt.librarymanagement.License): String =
-    license.asInstanceOf[Product].productElement(0).asInstanceOf[String]
+    license.spdxId
 
   def cacheify(name: String, dest: JFile => Option[JFile], in: Set[JFile], cacheDir: JFile): Set[JFile] = {
     sbt.util.FileFunction
