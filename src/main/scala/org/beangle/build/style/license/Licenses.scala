@@ -28,7 +28,7 @@ object Licenses {
     val templates = new mutable.HashMap[String, License]
 
     val content =
-      try scala.io.Source.fromInputStream(input)(Codec.UTF8).mkString
+      try scala.io.Source.fromInputStream(input)(using Codec.UTF8).mkString
       finally input.close()
     val licenses = Strings.split(content, '#')
     licenses foreach { license =>

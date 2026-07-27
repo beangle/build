@@ -103,7 +103,11 @@ object Strings {
   def isBlank(cs: CharSequence): Boolean = {
     if ((cs eq null) || cs.length == 0) return true
     val strLen = cs.length
-    for (i <- 0 until strLen if Character.isWhitespace(cs.charAt(i)) == false) return false
+    var i = 0
+    while (i < strLen) {
+      if (!Character.isWhitespace(cs.charAt(i))) return false
+      i += 1
+    }
     true
   }
 

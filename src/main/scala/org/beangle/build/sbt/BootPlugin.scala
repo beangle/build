@@ -25,7 +25,7 @@ import sbt.librarymanagement.{Artifact, ConfigRef, UpdateReport}
 
 import java.io.File
 
-/** Generates runtime dependency metadata for beangle-boot.
+/** Generates compile/runtime dependency metadata for beangle-boot.
  *
  * Uses sbt 2 [[UpdateReport]] (not classpath `Attributed` metadata) so ModuleID /
  * Artifact / jar File come from the resolver directly.
@@ -49,7 +49,7 @@ object BootPlugin extends sbt.AutoPlugin {
 
   object autoImport {
     val bootDependencies = taskKey[Option[File]]("Generate META-INF/beangle/dependencies from UpdateReport")
-    val bootRepo = taskKey[Unit]("Assemble non-SNAPSHOT runtime jars into target/repository (Maven layout)")
+    val bootRepo = taskKey[Unit]("Assemble non-SNAPSHOT compile/runtime jars into target/repository (Maven layout)")
   }
 
   import autoImport.*
@@ -76,17 +76,16 @@ object BootPlugin extends sbt.AutoPlugin {
     }
   )
 
-  /** Configurations that contribute jars needed to boot this project.
-   *
-   * `runtime` covers normal runtime deps; `optional` covers this module's own optional
-   * feature jars (still on Runtime classpath, but listed under a separate UpdateReport config).
+  /** Compile + runtime jars. Optional / test stay out of `dependencies`
+   * (same as excluding direct `% "optional"`; Ivy `runtime` extends `compile`).
    */
-  private val BootConfigs: Seq[ConfigRef] = Seq(ConfigRef("runtime"), ConfigRef("optional"))
+  private val BootConfigs: Seq[ConfigRef] = Seq(ConfigRef("compile"), ConfigRef("runtime"))
 
-  /** Non-SNAPSHOT main jars from [[UpdateReport]] for boot packaging.
+  /** Non-SNAPSHOT main jars from [[UpdateReport]] compile/runtime for boot packaging.
    *
    * Uses resolved [[Artifact]].name as Maven `artifactId` (already includes `_2.13` / `_3`
    * when published that way). Emits only classifier-less jars so each line stays 3-part GAV.
+   * Optional / test / provided configurations are not included.
    */
   private[sbt] def selectBootArtifacts(report: UpdateReport, selfCoord: String): Seq[BootArtifact] = {
     BootConfigs.flatMap(report.configuration).flatMap { conf =>

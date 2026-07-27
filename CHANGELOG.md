@@ -8,7 +8,7 @@
 | build | Upgrade sbt-pgp to 2.3.1, sbt-version-policy to 3.3.0 |
 | plugins | Adapt Boot/War/Style/Snapshot plugins for sbt 2 API (VirtualFileRef, Def.uncached, string metadata keys) |
 | style | `StylePlugin`: scan only current configuration source/resource dirs |
-| boot | Reimplement `BootPlugin` on `UpdateReport` (`runtime`+`optional` main jars); drop `sbt2-compat` |
+| boot | Reimplement `BootPlugin` on `UpdateReport` (compile/runtime main jars, exclude optional); drop `sbt2-compat` |
 | util | `Utils` uses native `FileConverter` / `moduleIDStr` / `artifactStr` codecs |
 
 **Downstream migration (sbt 1.x → 2.x):**

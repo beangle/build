@@ -37,9 +37,9 @@
 
 ### 3. BootPlugin 生成运行时依赖文件
 
-  BootPlugin 默认启用：通过 `resourceGenerators` 根据 `UpdateReport`
-  （`runtime` + `optional` 配置）自动生成 `/META-INF/beangle/dependencies`
-  （排除 SNAPSHOT；`optional` 表示对本模块可选、对 boot 仍需打包的特性依赖）。
+  BootPlugin 默认启用：通过 `resourceGenerators` 根据 `UpdateReport` 的
+  `compile`/`runtime` 配置自动生成 `/META-INF/beangle/dependencies`
+  （排除 SNAPSHOT 与 optional）。
   也可手动执行 `bootDependencies` / `bootRepo`。War 项目启用 WarPlugin 即可。
 
     lazy val myproject = (project in file("."))
