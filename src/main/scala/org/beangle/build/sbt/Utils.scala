@@ -19,25 +19,31 @@ package org.beangle.build.sbt
 
 import sbt.*
 import sbt.Keys.*
+import sbt.librarymanagement.{Artifact, ModuleID}
+import sbt.librarymanagement.LibraryManagementCodec.ArtifactFormat
 import sbt.util.CacheStoreFactory
 import sbt.util.FilesInfo.{exists, lastModified}
-import sbtcompat.PluginCompat.{parseArtifactStrAttribute, parseModuleIDStrAttribute, toFile as attributedToFile}
+import sjsonnew.support.scalajson.unsafe.{Converter, Parser}
+import xsbti.{FileConverter, HashedVirtualFileRef}
 
 import java.io.File as JFile
 
+/** sbt 2 helpers for classpath entries (`HashedVirtualFileRef` + string metadata). */
 object Utils {
 
-  def jar(sources: Traversable[(JFile, String)], outputJar: JFile, manifest: java.util.jar.Manifest): Unit =
+  def jar(sources: Iterable[(JFile, String)], outputJar: JFile, manifest: java.util.jar.Manifest): Unit =
     IO.jar(sources, outputJar, manifest, None)
 
-  def file(entry: Attributed[?])(using converter: FileConverter): JFile =
-    attributedToFile(entry.asInstanceOf[Attributed[sbtcompat.PluginCompat.FileRef]])
+  def file(entry: Attributed[HashedVirtualFileRef])(using conv: FileConverter): JFile =
+    conv.toPath(entry.data).toFile
 
-  def moduleId(entry: Attributed[?]): Option[sbt.librarymanagement.ModuleID] =
-    entry.metadata.get(moduleIDStr).map(parseModuleIDStrAttribute)
+  def moduleId(entry: Attributed[?]): Option[ModuleID] =
+    entry.metadata.get(moduleIDStr).map(Classpaths.moduleIdJsonKeyFormat.read)
 
-  def artifact(entry: Attributed[?]): Option[sbt.librarymanagement.Artifact] =
-    entry.metadata.get(artifactStr).map(parseArtifactStrAttribute)
+  def artifact(entry: Attributed[?]): Option[Artifact] =
+    entry.metadata.get(artifactStr).map { str =>
+      Converter.fromJsonUnsafe[Artifact](Parser.parseUnsafe(str))
+    }
 
   def licenseSpdxId(license: sbt.librarymanagement.License): String =
     license.spdxId

@@ -81,7 +81,7 @@ object WarPlugin extends AutoPlugin {
     Defaults.packageTaskSettings(pkg, warPrepare) ++
       Seq(pkg / artifact := Artifact(moduleName.value, "war", "war")) ++
       addArtifact(Compile / pkg / artifact, pkg) ++
-      Seq(pkg / packageOptions := Def.uncached((pkg / packageOptions).value ++ manifestOptions.value)) ++
+      Seq(pkg / packageOptions := (pkg / packageOptions).value ++ manifestOptions.value) ++
       Seq(
         Compile / packageBin / publishArtifact := false,
         (warPrepare / sourceDirectory) := (Compile / sourceDirectory).value / "webapp",

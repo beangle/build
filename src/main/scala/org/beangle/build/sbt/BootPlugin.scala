@@ -19,152 +19,124 @@ package org.beangle.build.sbt
 
 import org.beangle.build.boot.Dependency
 import org.beangle.build.util.Files
-import sbt.Keys.*
 import sbt.*
+import sbt.Keys.*
+import sbt.librarymanagement.{Artifact, ConfigRef, UpdateReport}
 
-import java.io.{File, FileWriter, IOException}
-import scala.collection.mutable
+import java.io.File
 
+/** Generates runtime dependency metadata for beangle-boot.
+ *
+ * Uses sbt 2 [[UpdateReport]] (not classpath `Attributed` metadata) so ModuleID /
+ * Artifact / jar File come from the resolver directly.
+ */
 object BootPlugin extends sbt.AutoPlugin {
 
   val DependenciesFileName = "dependencies"
 
-  object autoImport {
-    val bootDependencies = taskKey[Option[File]]("Generate boot dependencies file")
-    val bootRepo = taskKey[Unit]("Assemble boot dependencies to make a repo")
+  /** One resolved main jar suitable for beangle-boot.
+   *
+   * Coordinates are strict Maven GAV (`groupId:artifactId:version`).
+   * Scala binary suffixes (`_2.13`, `_3`, …) belong in `artifactId`, not in a 4th field
+   * and not in `version` — matching Maven Central paths and beangle-boot's 3-part parser.
+   */
+  final case class BootArtifact(organization: String, name: String, revision: String, jar: File) {
+    def coord: String = s"$organization:$name"
 
-    lazy val bootSettings: Seq[Def.Setting[?]] = Seq(
-      bootDependencies := Def.uncached(bootDependenciesTask.value),
-      bootRepo := Def.uncached(bootRepoTask.value),
-      Compile / packageBin := Def.uncached((Compile / packageBin).dependsOn(bootDependencies).value)
-    )
+    /** Maven GAV line: `groupId:artifactId:version` (exactly three colon-separated parts). */
+    def gav: String = s"$organization:$name:$revision"
+  }
+
+  object autoImport {
+    val bootDependencies = taskKey[Option[File]]("Generate META-INF/beangle/dependencies from UpdateReport")
+    val bootRepo = taskKey[Unit]("Assemble non-SNAPSHOT runtime jars into target/repository (Maven layout)")
   }
 
   import autoImport.*
 
-  override val projectSettings = inConfig(Compile)(bootSettings)
-
   override def trigger = allRequirements
 
-  lazy val bootDependenciesTask =
-    Def.task {
-      given FileConverter = fileConverter.value
-      val excludeGavs = Set(organization.value + ":" + name.value) ++ findOptionalGavs(libraryDependencies.value)
-      generate(
-        crossTarget.value.getAbsolutePath,
-        (Runtime / fullClasspath).value,
-        scalaBinaryVersion.value,
-        excludeGavs,
-        streams.value.log
-      )
-    }
-
-  lazy val bootRepoTask =
-    Def.task {
-      given FileConverter = fileConverter.value
+  override val projectSettings: Seq[Setting[?]] = Seq(
+    bootDependencies := Def.uncached {
+      val out = (Compile / resourceManaged).value / "META-INF" / "beangle" / DependenciesFileName
+      val artifacts = selectBootArtifacts(update.value, selfCoord = organization.value + ":" + name.value)
+      Some(writeDependenciesFile(out, artifacts, streams.value.log))
+    },
+    // Package via resourceGenerators — never redefine packageBin with Def.uncached self-ref (sbt 2 hang).
+    Compile / resourceGenerators += Def.task {
+      bootDependencies.value.toSeq
+    }.taskValue,
+    bootRepo := Def.uncached {
       val build = loadedBuild.value
       val base = new File(build.root) / "target/repository"
       val isRoot = baseDirectory.value.getCanonicalFile == new File(build.root).getCanonicalFile
-      val excludeGavs = Set(organization.value + ":" + name.value) ++ findOptionalGavs(libraryDependencies.value)
-      assemble(base, (Runtime / fullClasspath).value, scalaBinaryVersion.value, excludeGavs, streams.value.log)
-      if (isRoot) {
-        streams.value.log.info(s"project repository is generated in ${base}")
-      }
+      val artifacts = selectBootArtifacts(update.value, selfCoord = organization.value + ":" + name.value)
+      assembleRepo(base, artifacts, streams.value.log)
+      if (isRoot) streams.value.log.info(s"project repository is generated in $base")
     }
+  )
 
-  private def findOptionalGavs(dependencies: collection.Seq[ModuleID]): Set[String] = {
-    val optionals = new mutable.HashSet[String]
-    dependencies foreach { m =>
-      val scope = m.configurations.getOrElse("compile")
-      if (scope == "optional") {
-        optionals.add(m.organization + ":" + m.name)
-      }
-    }
-    optionals.toSet
-  }
+  /** Configurations that contribute jars needed to boot this project.
+   *
+   * `runtime` covers normal runtime deps; `optional` covers this module's own optional
+   * feature jars (still on Runtime classpath, but listed under a separate UpdateReport config).
+   */
+  private val BootConfigs: Seq[ConfigRef] = Seq(ConfigRef("runtime"), ConfigRef("optional"))
 
-  private def generate(target: String, dependencies: collection.Seq[Attributed[?]], sbv: String,
-                       excludeGavs: Set[String], log: util.Logger)(using FileConverter): Option[File] = {
-    val folder = target + "/classes/META-INF/beangle"
-    new File(folder).mkdirs()
-    val file = new File(folder + "/" + DependenciesFileName)
-    file.delete()
-    try {
-      file.createNewFile()
-      val results = new collection.mutable.HashSet[String]
-      dependencies foreach { d =>
-        Utils.moduleId(d) match {
-          case Some(m) =>
-            val gav = m.organization + ":" + m.name
-            val scope = m.configurations.getOrElse("compile")
-            if (!excludeGavs.contains(gav) && "test" != scope && !m.revision.contains("SNAPSHOT")) {
-              results += toGav(m, sbv)
-            }
-          case _ =>
-        }
-      }
-      val fw = new FileWriter(file)
-      try fw.write(results.toSeq.sorted.mkString("\n"))
-      finally fw.close()
-      log.info(s"generated ${results.size} dependencies at " + file.getAbsolutePath)
-      Some(file)
-    } catch {
-      case e: IOException => e.printStackTrace(); None
-    }
-  }
-
-  private def assemble(projectRepoDir: File, dependencies: collection.Seq[Attributed[?]], sbv: String,
-                       excludeGavs: Set[String], log: util.Logger)(using FileConverter): Unit = {
-    projectRepoDir.mkdirs()
-    val artifacts = new collection.mutable.ArrayBuffer[Attributed[?]]
-    dependencies foreach { d =>
-      Utils.moduleId(d) match {
-        case Some(m) =>
-          val gav = m.organization + ":" + m.name
-          val scope = m.configurations.getOrElse("compile")
-          if (!excludeGavs.contains(gav) && "test" != scope && !m.revision.contains("SNAPSHOT")) artifacts += d
-        case _ =>
-      }
-    }
-    copy(artifacts, projectRepoDir, sbv, log)
-  }
-
-  private def copy(artifacts: collection.Seq[Attributed[?]], base: File, sbv: String, log: util.Logger)(using FileConverter): Unit = {
-    artifacts foreach { artifact =>
-      toMavenRepoPath(base.getAbsolutePath, artifact, sbv) foreach { path =>
-        val dest = new File(path)
-        val destSha1 = new File(path + ".sha1")
-        val src = Utils.file(artifact)
-        if (!dest.exists()) Files.copy(src, dest)
-        if (!destSha1.exists()) {
-          val sha1File = new File(src.getAbsolutePath + ".sha1")
-          if (sha1File.exists()) {
-            Files.copy(sha1File, new File(path + ".sha1"))
-          } else {
-            log.warn(s"Missing sha1 for $path")
+  /** Non-SNAPSHOT main jars from [[UpdateReport]] for boot packaging.
+   *
+   * Uses resolved [[Artifact]].name as Maven `artifactId` (already includes `_2.13` / `_3`
+   * when published that way). Emits only classifier-less jars so each line stays 3-part GAV.
+   */
+  private[sbt] def selectBootArtifacts(report: UpdateReport, selfCoord: String): Seq[BootArtifact] = {
+    BootConfigs.flatMap(report.configuration).flatMap { conf =>
+      conf.modules.iterator
+        .filterNot(_.evicted)
+        .filterNot(_.module.revision.contains("SNAPSHOT"))
+        .filterNot(mr => (mr.module.organization + ":" + mr.module.name) == selfCoord)
+        .flatMap { mr =>
+          mr.artifacts.iterator.collect {
+            case (art, jar) if isMainJar(art) =>
+              BootArtifact(mr.module.organization, art.name, mr.module.revision, jar)
           }
         }
+    }.distinctBy(_.gav).sortBy(_.gav)
+  }
+
+  private def isMainJar(art: Artifact): Boolean =
+    art.extension == "jar" &&
+      art.classifier.isEmpty &&
+      (art.`type` == "jar" || art.`type` == "bundle")
+
+  /** Validates Maven GAV: non-empty groupId:artifactId:version (exactly 3 parts, no packaging/classifier). */
+  private[sbt] def requireMavenGav(gav: String): String = {
+    val parts = gav.split(":", -1)
+    require(
+      parts.length == 3 && parts.forall(_.nonEmpty),
+      s"boot dependency must be Maven GAV groupId:artifactId:version, got: $gav"
+    )
+    gav
+  }
+
+  private def writeDependenciesFile(file: File, artifacts: Seq[BootArtifact], log: Logger): File = {
+    val lines = artifacts.map(a => requireMavenGav(a.gav))
+    IO.createDirectory(file.getParentFile)
+    IO.write(file, lines.mkString("\n"))
+    log.info(s"generated ${artifacts.size} dependencies at ${file.getAbsolutePath}")
+    file
+  }
+
+  private def assembleRepo(projectRepoDir: File, artifacts: Seq[BootArtifact], log: Logger): Unit = {
+    projectRepoDir.mkdirs()
+    artifacts.foreach { a =>
+      val dest = new File(Dependency.m2Path(projectRepoDir.getAbsolutePath, a.organization, a.name, a.revision))
+      val destSha1 = new File(dest.getAbsolutePath + ".sha1")
+      if (!dest.exists()) Files.copy(a.jar, dest)
+      if (!destSha1.exists()) {
+        val sha1File = new File(a.jar.getAbsolutePath + ".sha1")
+        if (sha1File.exists()) Files.copy(sha1File, destSha1)
+        else log.warn(s"Missing sha1 for ${dest.getAbsolutePath}")
       }
     }
   }
-
-  private def toGav(m: sbt.librarymanagement.ModuleID, sbv: String): String = {
-    s"${m.organization}:${artifactName(m, sbv)}:${m.revision}"
-  }
-
-  private def artifactName(m: sbt.librarymanagement.ModuleID, sbv: String): String = {
-    m.crossVersion match {
-      case sbt.librarymanagement.Disabled => m.name
-      case _: sbt.librarymanagement.Binary => m.name + "_" + sbv
-      case _ => m.name
-    }
-  }
-
-  private def toMavenRepoPath(base: String, d: Attributed[?], sbv: String): Option[String] = {
-    Utils.moduleId(d) match {
-      case Some(m) => Some(Dependency.m2Path(base, m.organization, artifactName(m, sbv), m.revision))
-      case _ => None
-    }
-  }
-
 }

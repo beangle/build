@@ -24,7 +24,6 @@ import sbt.Keys.*
 import sbt.*
 
 import java.io.{File as JFile}
-import scala.collection.mutable
 
 object StylePlugin extends sbt.AutoPlugin {
 
@@ -37,17 +36,16 @@ object StylePlugin extends sbt.AutoPlugin {
     val headerEmptyLine: SettingKey[Boolean] =
       settingKey("An empty line should be added between the header and the body")
 
+    /** Per-configuration style tasks (scan only that configuration's dirs). */
     lazy val styleTaskSettings: Seq[Def.Setting[?]] = Seq(
-      styleCheck := Def.uncached(checkTask.value),
-      styleFormat := Def.uncached(formatTask.value)
+      styleCheck := Def.uncached(checkInConfig.value),
+      styleFormat := Def.uncached(formatInConfig.value)
     )
 
-    lazy val styleCompileSettings: Seq[Def.Setting[?]] = Seq(
-      packageBin / packageOptions ++= Def.uncached {
+    lazy val stylePackageSettings: Seq[Def.Setting[?]] = Seq(
+      Compile / packageBin / packageOptions ++= Def.uncached {
         Seq(PackageOption.ManifestAttributes(new java.util.jar.Attributes.Name("Bundle-License") -> licenseName(licenses.value).getOrElse("UNKNOWN")))
-      },
-      Compile / compile := Def.uncached((Compile / compile).dependsOn(Compile / styleCheck).value),
-      Test / compile := Def.uncached((Test / compile).dependsOn(Test / styleCheck).value)
+      }
     )
   }
 
@@ -60,22 +58,26 @@ object StylePlugin extends sbt.AutoPlugin {
   override val projectSettings =
     inConfig(Compile)(styleTaskSettings) ++
       inConfig(Test)(styleTaskSettings) ++
-      styleCompileSettings
+      stylePackageSettings ++
+      // Auto style check before Compile/compile. Only current config dirs are scanned
+      // (crossing into Test dirs from Compile deadlocks Test/compile on sbt 2).
+      // Avoid Def.uncached(self.dependsOn(...).value) — also deadlocks on sbt 2.
+      Seq(
+        Compile / compile := Def.uncached {
+          (Compile / styleCheck).value
+          (Compile / compile).value
+        },
+        Test / compile := Def.uncached {
+          (Test / styleCheck).value
+          (Test / compile).value
+        }
+      )
 
-  lazy val formatTask =
+  private lazy val checkInConfig =
     Def.task {
       val license = detectLicenseHeader(licenses.value.toList, organizationName.value,
         startYear.value.map(_.toString), licenseRepo)
-      val sources = sourceDirs.value
-      streams.value.log.info("style formatting for " + name.value)
-      Style.format(sources, None, WsOptions.Default, LicenseOptions(license, headerEmptyLine.value))
-    }
-
-  lazy val checkTask =
-    Def.task {
-      val license = detectLicenseHeader(licenses.value.toList, organizationName.value,
-        startYear.value.map(_.toString), licenseRepo)
-      val sources = sourceDirs.value
+      val sources = unmanagedSourceDirectories.value ++ unmanagedResourceDirectories.value
       streams.value.log.info("style checking for " + name.value)
       val warns = Style.check(sources, LicenseOptions(license, headerEmptyLine.value))
       if (warns.nonEmpty) {
@@ -94,14 +96,14 @@ object StylePlugin extends sbt.AutoPlugin {
       }
     }
 
-  private def sourceDirs: Def.Initialize[Task[Seq[JFile]]] = Def.task {
-    val dirs = new mutable.ArrayBuffer[JFile]
-    dirs ++= (Compile / unmanagedSourceDirectories).value
-    dirs ++= (Test / unmanagedSourceDirectories).value
-    dirs ++= (Compile / unmanagedResourceDirectories).value
-    dirs ++= (Test / unmanagedResourceDirectories).value
-    dirs.toSeq
-  }
+  private lazy val formatInConfig =
+    Def.task {
+      val license = detectLicenseHeader(licenses.value.toList, organizationName.value,
+        startYear.value.map(_.toString), licenseRepo)
+      val sources = unmanagedSourceDirectories.value ++ unmanagedResourceDirectories.value
+      streams.value.log.info("style formatting for " + name.value)
+      Style.format(sources, None, WsOptions.Default, LicenseOptions(license, headerEmptyLine.value))
+    }
 
   def licenseName(licenses: Seq[sbt.librarymanagement.License]): Option[String] = {
     licenses match {

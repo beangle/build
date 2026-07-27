@@ -6,8 +6,10 @@
 |------|--------|
 | build | Require sbt 2.0.3+; publish artifact suffix is now `_sbt2_3` |
 | build | Upgrade sbt-pgp to 2.3.1, sbt-version-policy to 3.3.0 |
-| build | Add sbt2-compat for classpath/metadata helpers |
 | plugins | Adapt Boot/War/Style/Snapshot plugins for sbt 2 API (VirtualFileRef, Def.uncached, string metadata keys) |
+| style | `StylePlugin`: scan only current configuration source/resource dirs |
+| boot | Reimplement `BootPlugin` on `UpdateReport` (`runtime`+`optional` main jars); drop `sbt2-compat` |
+| util | `Utils` uses native `FileConverter` / `moduleIDStr` / `artifactStr` codecs |
 
 **Downstream migration (sbt 1.x → 2.x):**
 

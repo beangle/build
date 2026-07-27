@@ -27,6 +27,5 @@ lazy val root = (project in file("."))
   .settings(
     name := "sbt-beangle-build",
     libraryDependencies ++= Seq(apache_commons_compress),
-    addSbtPlugin("com.github.sbt" % "sbt2-compat" % "0.1.0"),
     commonSettings
   )

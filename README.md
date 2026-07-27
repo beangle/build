@@ -37,11 +37,10 @@
 
 ### 3. BootPlugin 生成运行时依赖文件
 
-  在项目的 build.sbt 中添加如下代码（WarPlugin 已自动启用 BootPlugin，war 项目可省略）：
-
-    Compile / compile := (Compile / compile).dependsOn(bootDependencies).value
-
-  可自动生成项目运行时依赖文件 `/META-INF/beangle/dependencies`。如果是 war 项目则可以省去上述配置，简单的启用 war 插件即可。
+  BootPlugin 默认启用：通过 `resourceGenerators` 根据 `UpdateReport`
+  （`runtime` + `optional` 配置）自动生成 `/META-INF/beangle/dependencies`
+  （排除 SNAPSHOT；`optional` 表示对本模块可选、对 boot 仍需打包的特性依赖）。
+  也可手动执行 `bootDependencies` / `bootRepo`。War 项目启用 WarPlugin 即可。
 
     lazy val myproject = (project in file("."))
        .enablePlugins(WarPlugin)
