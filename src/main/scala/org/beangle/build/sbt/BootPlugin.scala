@@ -21,20 +21,31 @@ import org.beangle.build.boot.Dependency
 import org.beangle.build.util.Files
 import sbt.*
 import sbt.Keys.*
-import sbt.librarymanagement.{Artifact, ConfigRef, UpdateReport}
+import sbt.librarymanagement.{Artifact, ConfigRef, ModuleReport, UpdateReport}
+import xsbti.{FileConverter, HashedVirtualFileRef}
 
 import java.io.File
 
 /** Generates compile/runtime dependency metadata for beangle-boot.
  *
- * Uses sbt 2 [[UpdateReport]] (not classpath `Attributed` metadata) so ModuleID /
- * Artifact / jar File come from the resolver directly.
+ * Two tasks, two outputs:
+ *  - [[bootDependencies]] writes `META-INF/beangle/dependencies` (GAV lines only).
+ *  - [[bootRepo]] copies real jars into `target/repository` (Maven layout).
+ *
+ * Both start from sbt [[UpdateReport]] compile/runtime modules (not classpath
+ * `Attributed` metadata). SNAPSHOT / optional / test / provided stay out.
+ *
+ * Inter-project `.dependsOn` siblings appear in the report with empty `artifacts`
+ * (classpath products, not resolver jars). [[selectBootGavs]] still lists their GAV
+ * so boot can download after publish; [[selectBootArtifacts]] includes them only when
+ * an exported `.jar` is on `internalDependencyClasspath` (`exportJars := true`).
+ * Class directories are ignored for [[bootRepo]].
  */
 object BootPlugin extends sbt.AutoPlugin {
 
   val DependenciesFileName = "dependencies"
 
-  /** One resolved main jar suitable for beangle-boot.
+  /** Resolved main jar for [[bootRepo]] (`jar` is always present).
    *
    * Coordinates are strict Maven GAV (`groupId:artifactId:version`).
    * Scala binary suffixes (`_2.13`, `_3`, …) belong in `artifactId`, not in a 4th field
@@ -57,51 +68,95 @@ object BootPlugin extends sbt.AutoPlugin {
   override def trigger = allRequirements
 
   override val projectSettings: Seq[Setting[?]] = Seq(
+    // GAV list only — siblings without a local jar are still written.
     bootDependencies := Def.uncached {
       val out = (Compile / resourceManaged).value / "META-INF" / "beangle" / DependenciesFileName
-      val artifacts = selectBootArtifacts(update.value, selfCoord = organization.value + ":" + name.value)
-      Some(writeDependenciesFile(out, artifacts, streams.value.log))
+      val gavs = selectBootGavs(update.value, selfCoord = organization.value + ":" + name.value)
+      Some(writeDependenciesFile(out, gavs, streams.value.log))
     },
     // Package via resourceGenerators — never redefine packageBin with Def.uncached self-ref (sbt 2 hang).
     Compile / resourceGenerators += Def.task {
       bootDependencies.value.toSeq
     }.taskValue,
+    // Local Maven repo of jars that actually exist (resolver + exported siblings).
     bootRepo := Def.uncached {
+      given FileConverter = fileConverter.value
       val build = loadedBuild.value
       val base = new File(build.root) / "target/repository"
       val isRoot = baseDirectory.value.getCanonicalFile == new File(build.root).getCanonicalFile
-      val artifacts = selectBootArtifacts(update.value, selfCoord = organization.value + ":" + name.value)
+      val artifacts = selectBootArtifacts(
+        update.value,
+        (Runtime / internalDependencyClasspath).value,
+        selfCoord = organization.value + ":" + name.value
+      )
       assembleRepo(base, artifacts, streams.value.log)
       if (isRoot) streams.value.log.info(s"project repository is generated in $base")
     }
   )
 
-  /** Compile + runtime jars. Optional / test stay out of `dependencies`
+  /** Compile + runtime. Optional / test / provided are not in these configs
    * (same as excluding direct `% "optional"`; Ivy `runtime` extends `compile`).
    */
   private val BootConfigs: Seq[ConfigRef] = Seq(ConfigRef("compile"), ConfigRef("runtime"))
 
-  /** Non-SNAPSHOT main jars from [[UpdateReport]] compile/runtime for boot packaging.
-   *
-   * Uses resolved [[Artifact]].name as Maven `artifactId` (already includes `_2.13` / `_3`
-   * when published that way). Emits only classifier-less jars so each line stays 3-part GAV.
-   * Optional / test / provided configurations are not included.
-   */
-  private[sbt] def selectBootArtifacts(report: UpdateReport, selfCoord: String): Seq[BootArtifact] = {
-    BootConfigs.flatMap(report.configuration).flatMap { conf =>
+  /** Shared module filter: compile/runtime, not evicted, not SNAPSHOT, not self. */
+  private def bootModules(report: UpdateReport, selfCoord: String): Iterator[ModuleReport] =
+    BootConfigs.flatMap(report.configuration).iterator.flatMap { conf =>
       conf.modules.iterator
         .filterNot(_.evicted)
         .filterNot(_.module.revision.contains("SNAPSHOT"))
         .filterNot(mr => (mr.module.organization + ":" + mr.module.name) == selfCoord)
-        .flatMap { mr =>
-          mr.artifacts.iterator.collect {
-            case (art, jar) if isMainJar(art) =>
-              BootArtifact(mr.module.organization, art.name, mr.module.revision, jar)
-          }
-        }
-    }.distinctBy(_.gav).sortBy(_.gav)
+    }
+
+  /** GAV lines for [[bootDependencies]] (no jar required). */
+  private[sbt] def selectBootGavs(report: UpdateReport, selfCoord: String): Seq[String] =
+    bootModules(report, selfCoord).flatMap(moduleBootGavs).distinct.toSeq.sorted
+
+  /** Jars for [[bootRepo]]: UpdateReport main jars + exported sibling jars only. */
+  private[sbt] def selectBootArtifacts(
+    report: UpdateReport,
+    internal: Seq[Attributed[HashedVirtualFileRef]],
+    selfCoord: String
+  )(using FileConverter): Seq[BootArtifact] = {
+    // organization:name -> exported sibling jar (`exportJars`); class dirs omitted.
+    val internalJars = internal.flatMap { entry =>
+      Utils.moduleId(entry).flatMap { m =>
+        val product = Utils.file(entry)
+        if (product.isFile && product.getName.endsWith(".jar"))
+          Some((m.organization + ":" + m.name) -> product)
+        else None
+      }
+    }.toMap
+    bootModules(report, selfCoord).flatMap(moduleBootArtifacts(_, internalJars)).distinctBy(_.gav).toSeq.sortBy(_.gav)
   }
 
+  /** One module → GAV line(s). Empty artifacts ⇒ inter-project dep; use [[ModuleID.name]]. */
+  private[sbt] def moduleBootGavs(mr: ModuleReport): Seq[String] = {
+    val fromArts = mr.artifacts.iterator.collect {
+      case (art, _) if isMainJar(art) => s"${mr.module.organization}:${art.name}:${mr.module.revision}"
+    }.toSeq
+    if (fromArts.nonEmpty) fromArts
+    else if (mr.artifacts.isEmpty && mr.missingArtifacts.isEmpty)
+      Seq(s"${mr.module.organization}:${mr.module.name}:${mr.module.revision}")
+    else Nil
+  }
+
+  /** One module → [[BootArtifact]] with a real jar, or empty if none (e.g. classes-only sibling). */
+  private[sbt] def moduleBootArtifacts(mr: ModuleReport, internalJars: Map[String, File]): Seq[BootArtifact] = {
+    val mains = mr.artifacts.iterator.collect {
+      case (art, jar) if isMainJar(art) =>
+        BootArtifact(mr.module.organization, art.name, mr.module.revision, jar)
+    }.toSeq
+    if (mains.nonEmpty) mains
+    else if (mr.artifacts.isEmpty && mr.missingArtifacts.isEmpty) {
+      val coord = mr.module.organization + ":" + mr.module.name
+      internalJars.get(coord).map(jar =>
+        BootArtifact(mr.module.organization, mr.module.name, mr.module.revision, jar)
+      ).toSeq
+    } else Nil
+  }
+
+  /** Classifier-less jar/bundle only — keeps each dependencies line as 3-part GAV. */
   private def isMainJar(art: Artifact): Boolean =
     art.extension == "jar" &&
       art.classifier.isEmpty &&
@@ -117,14 +172,15 @@ object BootPlugin extends sbt.AutoPlugin {
     gav
   }
 
-  private def writeDependenciesFile(file: File, artifacts: Seq[BootArtifact], log: Logger): File = {
-    val lines = artifacts.map(a => requireMavenGav(a.gav))
+  private def writeDependenciesFile(file: File, gavs: Seq[String], log: Logger): File = {
+    val lines = gavs.map(requireMavenGav)
     IO.createDirectory(file.getParentFile)
     IO.write(file, lines.mkString("\n"))
-    log.info(s"generated ${artifacts.size} dependencies at ${file.getAbsolutePath}")
+    log.info(s"generated ${gavs.size} dependencies at ${file.getAbsolutePath}")
     file
   }
 
+  /** Copy jars (+ sidecars `.sha1` when present) into Maven layout under `projectRepoDir`. */
   private def assembleRepo(projectRepoDir: File, artifacts: Seq[BootArtifact], log: Logger): Unit = {
     projectRepoDir.mkdirs()
     artifacts.foreach { a =>
