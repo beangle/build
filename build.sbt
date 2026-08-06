@@ -1,7 +1,7 @@
 import BuildSettings.*
 import sbt.*
 
-version := "0.1.3-SNAPSHOT"
+version := "0.1.3"
 description := "Beangle Build Tools."
 organization := "org.beangle.build"
 homepage := Some(uri("https://github.com/beangle/build"))
