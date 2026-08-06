@@ -154,6 +154,8 @@ object WarPlugin extends AutoPlugin {
 
       val classpath = (Runtime / fullClasspath).value
       val packaged = (Compile / packageBin / packagedArtifact).value._1
+      val selfClasses = (Compile / classDirectory).value
+      val selfJar = converter.toPath((Compile / packageBin).value).toFile
       if (version.value.contains("SNAPSHOT")) {
         for {
           cpItem <- classpath.toList
@@ -168,20 +170,24 @@ object WarPlugin extends AutoPlugin {
               None
           }
           jarFile = cpArt.name + ".jar"
-          _ = Utils.jar(
-            sources = files,
-            outputJar = webappLibDir / jarFile,
-            manifest = new Manifest
-          )
+          _ = if (dir != selfClasses) {
+            Utils.jar(
+              sources = files,
+              outputJar = webappLibDir / jarFile,
+              manifest = new Manifest
+            )
+          }
         } yield ()
       }
 
+      val snapshotJars = classpath.map(Utils.file(_)).toSet filter { in =>
+        !in.isDirectory && in.getAbsolutePath.contains("-SNAPSHOT") &&
+          in.getName.endsWith(".jar") && in != selfJar
+      }
       Utils.cacheify(
         "lib-deps",
         { in => Some(webappTarget / "WEB-INF" / "lib" / in.getName) },
-        classpath.map(Utils.file(_)).toSet filter { in =>
-          !in.isDirectory && in.getAbsolutePath.contains("-SNAPSHOT") && in.getName.endsWith(".jar")
-        },
+        snapshotJars,
         cacheDir
       )
 
