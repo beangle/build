@@ -41,8 +41,8 @@ object SnapshotPlugin extends sbt.AutoPlugin {
     Def.task {
       val log = streams.value.log
       val a = (Compile / Keys.`package` / artifact).value
+      val file = fileConverter.value.toPath((Compile / Keys.`package`).value).toFile
       val dir = (snapshotBuild / target).value.getAbsolutePath + "/"
-      val file = new File(dir + a.name + "-" + version.value + "." + a.extension)
       if (version.value.contains("SNAPSHOT") && (a.extension == "war" || a.extension == "jar")) {
         if (file.exists()) {
           val formater = DateTimeFormatter.ofPattern("yyyyMMdd.HHmmss")
