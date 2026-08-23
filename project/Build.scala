@@ -33,7 +33,7 @@ object BuildSettings {
   val commonSettings = stubJavadocSettings ++ Seq(
     organizationName := "The Beangle Software",
     startYear := Some(2005),
-    licenses += sbt.librarymanagement.License("LGPL-3.0", uri("http://www.gnu.org/licenses/lgpl-3.0.txt")),
+    licenses += sbt.librarymanagement.License("GPL-3.0", uri("http://www.gnu.org/licenses/gpl-3.0.txt")),
     libraryDependencies ++= Seq(scalaTest % Test),
     crossPaths := true,
 
