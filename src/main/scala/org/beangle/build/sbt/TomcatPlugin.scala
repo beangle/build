@@ -47,6 +47,8 @@ object TomcatPlugin extends sbt.AutoPlugin {
 
   import autoImport.*
 
+  override def trigger = noTrigger
+
   override lazy val projectSettings: Seq[Setting[?]] = baseSettings
 
   private def launchTomcat(target: String, dependencies: Seq[File], args: Seq[String], log: util.Logger): Unit = {

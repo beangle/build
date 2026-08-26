@@ -30,6 +30,8 @@ object UndertowPlugin extends sbt.AutoPlugin {
 
   import autoImport.*
 
+  override def trigger = noTrigger
+
   override lazy val projectSettings: Seq[Setting[?]] = baseSettings
 
 }
