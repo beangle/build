@@ -64,7 +64,7 @@ object MetaPlugin extends sbt.AutoPlugin {
       // 外部依赖 + 依赖项目 classes + 本模块 classes，避免 resourceGenerators 环（见 AotPlugin）
       val depClasses = (Compile / classDirectory).all(ScopeFilter(inDependencies(ThisProject))).value
       val classpath = CpFiles.files((Runtime / externalDependencyClasspath).value) ++ depClasses :+ classesDir
-      generate(beangleXml, listFile, classesDir, outputPath, classpath, streams.value.log)
+      generate(beangleXml, listFile, outputPath, classpath, streams.value.log)
     },
     Compile / resourceGenerators += Def.task {
       (Compile / metaIndex).value.toSeq
@@ -80,7 +80,7 @@ object MetaPlugin extends sbt.AutoPlugin {
       val mainClasses = (Compile / classDirectory).value
       val depClasses = (Compile / classDirectory).all(ScopeFilter(inDependencies(ThisProject))).value
       val classpath = CpFiles.files((Test / externalDependencyClasspath).value) ++ depClasses :+ mainClasses :+ classesDir
-      generate(beangleXml, listFile, classesDir, outputPath, classpath, streams.value.log)
+      generate(beangleXml, listFile, outputPath, classpath, streams.value.log)
     },
     Test / resourceGenerators += Def.task {
       (Test / metaIndex).value.toSeq
@@ -91,7 +91,7 @@ object MetaPlugin extends sbt.AutoPlugin {
    * 决定读取哪些类，写入清单文件后交给 MetaGenerator（--registrars）。
    * beangle.xml 缺失/无声明视为"项目无 bean 元数据"，正常跳过。
    */
-  private def generate(beangleXml: File, listFile: File, classesDir: File, output: File, classpath: Seq[File], log: Logger): Option[File] = {
+  private def generate(beangleXml: File, listFile: File, output: File, classpath: Seq[File], log: Logger): Option[File] = {
     if (!beangleXml.isFile) {
       log.debug(s"No $BeangleXmlName found; beanmeta.idx generation skipped")
       if (output.exists()) output.delete()
@@ -105,34 +105,11 @@ object MetaPlugin extends sbt.AutoPlugin {
     writeList(listFile, classNames)
     val cpEntries = classpath.map(_.getAbsolutePath)
     val cp = cpEntries.mkString(File.pathSeparator)
-    // 与 AotPlugin 同理：resources 与 compileIncremental 并行时声明类可能尚未编译完（非零退出）。
-    // 失败时依据 classes 快照区分：快照持续变化 -> 重试；连续三次一致（classes 已稳定）-> 确有缺失类，立即报错。
-    val maxAttempts = 8
-    val attemptDelayMs = 1500L
-    var attempts = 0
-    var prevSnapshot = Option.empty[GeneratorSupport.ClassesSnapshot]
-    var stableCount = 0
-    while (attempts < maxAttempts) {
-      val snapshot = GeneratorSupport.snapshotClasses(classesDir)
-      runOnce(listFile, output, cp, cpEntries, log) match {
-        case Some(fileOpt) => return fileOpt
-        case None =>
-          if (snapshot.isDefined && prevSnapshot == snapshot) stableCount += 1
-          else stableCount = 0
-          if (stableCount >= 2) {
-            // 契约违约：beangle.xml 声明了模块但 classes 已稳定仍找不到 -> 报错失败构建
-            sys.error(s"Modules declared in $BeangleXmlName cannot be loaded (missing or invalid); see warnings above")
-          }
-      }
-      attempts += 1
-      prevSnapshot = snapshot
-      if (attempts < maxAttempts) {
-        log.warn(s"MetaGenerator attempt $attempts failed, retrying...")
-        Thread.sleep(attemptDelayMs * attempts)
-      }
+    // 与 AotPlugin 同理：生成器对"声明类未找到"退出码 2 静默报告，这里退避重试；
+    // 确定性违约（退出码 1）立即报错。
+    GeneratorSupport.retryGenerator(10, 3000L, "MetaGenerator", log) {
+      runOnce(listFile, output, cp, cpEntries, log)
     }
-    log.warn(s"MetaGenerator still failing after $maxAttempts attempts; no beanmeta.idx generated at $output")
-    None
   }
 
   private def writeList(file: File, classNames: Seq[String]): Unit = {
@@ -142,8 +119,8 @@ object MetaPlugin extends sbt.AutoPlugin {
     finally w.close()
   }
 
-  /** Runs the generator once; Some(file) 成功产出，Some(None) 正常但无产出，None 失败。 */
-  private def runOnce(listFile: File, output: File, cp: String, cpEntries: Seq[String], log: Logger): Option[Option[File]] = {
+  /** Runs the generator once; Right(Some(file)) 成功产出，Right(None) 正常但无产出，Left(GenFailure) 失败。 */
+  private def runOnce(listFile: File, output: File, cp: String, cpEntries: Seq[String], log: Logger): Either[GeneratorSupport.GenFailure, Option[File]] = {
     try {
       // 清掉残留产物，避免失败/跳过时打包旧 beanmeta.idx
       if (output.exists()) output.delete()
@@ -169,19 +146,20 @@ object MetaPlugin extends sbt.AutoPlugin {
       if (exitCode == 0) {
         if (output.exists() && output.length() > 0) {
           log.info(s"Generated beanmeta.idx at ${output.getAbsolutePath}")
-          Some(Some(output))
+          Right(Some(output))
         } else {
           log.info(s"No registrars declared; beanmeta.idx generation skipped")
-          Some(None)
+          Right(None)
         }
       } else {
-        log.warn(s"MetaGenerator exited with code $exitCode:\n$out")
-        None
+        val summary = out.toString.linesIterator.filter(_.nonEmpty).toSeq.lastOption.getOrElse(s"exited with code $exitCode")
+        log.debug(s"MetaGenerator exited with code $exitCode:\n$out")
+        Left(GeneratorSupport.GenFailure(exitCode, summary))
       }
     } catch {
       case e: Exception =>
         log.error(s"Failed to run MetaGenerator: ${e.getMessage}")
-        None
+        Left(GeneratorSupport.GenFailure(1, s"failed to run: ${e.getMessage}"))
     }
   }
 }

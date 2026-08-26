@@ -17,39 +17,32 @@
 
 package org.beangle.build.sbt
 
-import java.io.File
-import scala.collection.mutable.ArrayBuffer
+import sbt.Logger
 
-/** 生成器子进程辅助：classes 目录快照，用于区分"编译仍在写入"与"classes 已稳定"。 */
+import java.io.File
+
+/** 生成器子进程辅助：失败分类与退出码驱动的重试。 */
 private[sbt] object GeneratorSupport {
 
-  /** classes 目录快照（.class 数量 + 最新修改时间）；目录不存在时返回 None。 */
-  case class ClassesSnapshot(classCount: Long, lastModified: Long)
+  /** 生成器子进程失败结果：exitCode 1 为确定性违约，2 为声明类未找到（可重试）。 */
+  case class GenFailure(exitCode: Int, summary: String)
 
-  /** 统计 classes 目录下 .class 文件数量与最新修改时间；目录不存在时返回 None。 */
-  def snapshotClasses(dir: File): Option[ClassesSnapshot] = {
-    if (!dir.isDirectory) return None
-    var count = 0L
-    var latest = 0L
-    val stack = ArrayBuffer[File](dir)
-    while (stack.nonEmpty) {
-      val f = stack.remove(stack.size - 1)
-      val children = f.listFiles()
-      if (children != null) {
-        var i = 0
-        while (i < children.length) {
-          val c = children(i)
-          if (c.isDirectory) stack += c
-          else if (c.getName.endsWith(".class")) {
-            count += 1
-            val m = c.lastModified()
-            if (m > latest) latest = m
-          }
-          i += 1
-        }
+  /** 以生成器退出码驱动重试：0 成功、1 确定性失败立即报错、
+   *  2（声明类未找到，编译可能仍在进行）退避重试直到 maxAttempts。 */
+  def retryGenerator[T](maxAttempts: Int, attemptDelayMs: Long, task: String, log: Logger)(attempt: => Either[GenFailure, T]): T = {
+    var i = 1
+    while (i <= maxAttempts) {
+      attempt match {
+        case Right(value) => return value
+        case Left(f) =>
+          if (f.exitCode != 2) sys.error(s"$task failed: ${f.summary}")
+          if (i == maxAttempts) sys.error(s"$task still failing after $maxAttempts attempts: ${f.summary}")
+          log.warn(s"$task attempt $i failed (exit ${f.exitCode}); retrying in ${attemptDelayMs * i}ms")
+          Thread.sleep(attemptDelayMs * i)
       }
+      i += 1
     }
-    Some(ClassesSnapshot(count, latest))
+    sys.error(s"$task failed")
   }
 
   /** 从 beangle.xml 提取声明类：jpa/orm 的 mapping 与 cdi 的 module（带 class 属性）。 */

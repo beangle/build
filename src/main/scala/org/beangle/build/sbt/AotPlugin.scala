@@ -34,14 +34,14 @@ import java.io.File
   *
   * Loads each declared registrar, collects its registrations, and writes GraalVM config
   * files (reflect-config.json, resource-config.json, proxy-config.json,
-  * serialization-config.json).
+  * serialization-config.json, native-image.properties).
   */
 object AotPlugin extends sbt.AutoPlugin {
 
   private val OutputDir = "META-INF/native-image"
   private val RegistrarsPath = "META-INF/beangle/aot-registrars.txt"
   private val BeangleXmlName = "beangle.xml"
-  private val ConfigNames = Seq("reflect-config.json", "resource-config.json", "proxy-config.json", "serialization-config.json")
+  private val ConfigNames = Seq("reflect-config.json", "resource-config.json", "proxy-config.json", "serialization-config.json", "native-image.properties")
 
   object autoImport {
     val aotHints = taskKey[Seq[File]]("Generate GraalVM native-image config files from AotHintRegistrar implementations")
@@ -64,7 +64,7 @@ object AotPlugin extends sbt.AutoPlugin {
       val registrarsFile = (Compile / resourceDirectory).value / RegistrarsPath
       val beangleXml = (Compile / resourceDirectory).value / BeangleXmlName
       val listFile = (Compile / target).value / "aot" / "aot-registrars.txt"
-      generate(registrarsFile, beangleXml, listFile, classesDir, outDir, classpath, streams.value.log)
+      generate(registrarsFile, beangleXml, listFile, outDir, classpath, streams.value.log)
     },
     Compile / resourceGenerators += Def.task {
       aotHints.value
@@ -74,7 +74,7 @@ object AotPlugin extends sbt.AutoPlugin {
   /** 合并 aot-registrars.txt 与 beangle.xml（jpa/orm mapping、cdi module）声明的
    * AotHintRegistrar 类为契约生成配置；两者皆无声明视为"项目无 AOT 提示"，正常跳过。
    */
-  private def generate(registrarsFile: File, beangleXml: File, listFile: File, classesDir: File, outDir: File, classpath: Seq[File], log: Logger): Seq[File] = {
+  private def generate(registrarsFile: File, beangleXml: File, listFile: File, outDir: File, classpath: Seq[File], log: Logger): Seq[File] = {
     val declared = scala.collection.mutable.LinkedHashSet.empty[String]
     if (registrarsFile.isFile) readLines(registrarsFile).foreach(declared += _)
     if (beangleXml.isFile) GeneratorSupport.extractModuleClasses(beangleXml).foreach(declared += _)
@@ -86,36 +86,11 @@ object AotPlugin extends sbt.AutoPlugin {
     writeList(listFile, declared.toSeq)
     val cpEntries = classpath.map(_.getAbsolutePath)
     val cp = cpEntries.mkString(File.pathSeparator)
-    // sbt 2 + exportJars 下 resources 与 compileIncremental 并行调度：编译可能正改写 classes 目录，
-    // 清单中的类可能尚未编译完（生成器非零退出）。失败时依据 classes 快照区分：
-    //  - 快照持续变化（编译未完成）-> 重试；
-    //  - 连续三次快照一致（classes 已稳定）-> 清单中确有缺失/非法类，立即报错。
-    val maxAttempts = 8
-    val attemptDelayMs = 1500L
-    var attempts = 0
-    var prevSnapshot = Option.empty[GeneratorSupport.ClassesSnapshot]
-    var stableCount = 0
-    while (attempts < maxAttempts) {
-      val snapshot = GeneratorSupport.snapshotClasses(classesDir)
-      runOnce(listFile, outDir, cp, cpEntries, log) match {
-        case Some(files) => return files
-        case None =>
-          if (snapshot.isDefined && prevSnapshot == snapshot) stableCount += 1
-          else stableCount = 0
-          if (stableCount >= 2) {
-            // 契约违约：清单声明了类但 classes 已稳定仍找不到 -> 报错失败构建
-            sys.error(s"Declared registrars ($RegistrarsPath / $BeangleXmlName) cannot be loaded (missing or invalid); see warnings above")
-          }
-      }
-      attempts += 1
-      prevSnapshot = snapshot
-      if (attempts < maxAttempts) {
-        log.warn(s"AotHintGenerator attempt $attempts failed, retrying...")
-        Thread.sleep(attemptDelayMs * attempts)
-      }
+    // resources 与 compileIncremental 并行调度，首次编译较慢：生成器对"声明类未找到"
+    // 退出码 2 静默报告（不打印异常），这里退避重试；确定性违约（退出码 1）立即报错。
+    GeneratorSupport.retryGenerator(10, 3000L, "AotHintGenerator", log) {
+      runOnce(listFile, outDir, cp, cpEntries, log)
     }
-    log.warn(s"AotHintGenerator still failing after $maxAttempts attempts; no GraalVM configs generated in $outDir")
-    Nil
   }
 
   /** 读取清单文件：每行一个类名，# 开头为注释，忽略空行。 */
@@ -137,8 +112,8 @@ object AotPlugin extends sbt.AutoPlugin {
   private def deleteStaleConfigs(outDir: File): Unit = {
     ConfigNames.foreach(name => (outDir / name).delete())
   }
-  /** Runs the generator once; returns Some(files) on success, None on failure. */
-  private def runOnce(registrarsFile: File, outDir: File, cp: String, cpEntries: Seq[String], log: Logger): Option[Seq[File]] = {
+  /** Runs the generator once; Right(files) 成功产出，Left(GenFailure) 按退出码分类失败。 */
+  private def runOnce(registrarsFile: File, outDir: File, cp: String, cpEntries: Seq[String], log: Logger): Either[GeneratorSupport.GenFailure, Seq[File]] = {
     try {
       // 清掉上次残留配置，避免失败/跳过时把旧产物打包进 jar
       deleteStaleConfigs(outDir)
@@ -164,15 +139,16 @@ object AotPlugin extends sbt.AutoPlugin {
       if (exitCode == 0) {
         val files = ConfigNames.map(name => outDir / name).filter(_.exists())
         if (files.nonEmpty) log.info(s"Generated GraalVM configs in ${outDir.getAbsolutePath}")
-        Some(files)
+        Right(files)
       } else {
-        log.warn(s"AotHintGenerator exited with code $exitCode:\n$out")
-        None
+        val summary = out.toString.linesIterator.filter(_.nonEmpty).toSeq.lastOption.getOrElse(s"exited with code $exitCode")
+        log.debug(s"AotHintGenerator exited with code $exitCode:\n$out")
+        Left(GeneratorSupport.GenFailure(exitCode, summary))
       }
     } catch {
       case e: Exception =>
         log.error(s"Failed to run AotHintGenerator: ${e.getMessage}")
-        None
+        Left(GeneratorSupport.GenFailure(1, s"failed to run: ${e.getMessage}"))
     }
   }
 }
