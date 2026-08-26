@@ -25,18 +25,15 @@ import java.io.File
 
 /** Generates `META-INF/beangle/beanmeta.idx` from compiled classes.
  *
- *  Opt-in plugin — enable explicitly in projects that define MetaRegistrar subclasses:
- *  {{{
- *  // build.sbt
- *  lazy val myModule = (project in file(".")).enablePlugins(MetaPlugin)
- *  }}}
+ *  Auto-enabled on every JVM project. Generation is driven by the anchor file
+ *  `src/main/resources/beangle.xml`; projects without it are skipped without error, so no
+ *  explicit opt-in is needed.
  *
- *  Reads `src/main/resources/beangle.xml` for declared modules (`<jpa>/<orm><mapping class>`
- *  and `<cdi><module class>`, all MetaRegistrar subclasses such as MappingModule/BindModule)
+ *  Reads `beangle.xml` for declared modules (`<jpa>/<orm><mapping class>` and
+ *  `<cdi><module class>`, all MetaRegistrar subclasses such as MappingModule/BindModule)
  *  as the contract: every declared class must be found, otherwise generation fails with an
- *  error. A missing beangle.xml means the project has no bean metadata and is skipped normally.
- *  Writes a combined beanmeta.idx, registered via [[resourceGenerators]] so it lands in the
- *  packaged JAR automatically. Test-scope beangle.xml is supported via `Test / metaIndex`.
+ *  error. Writes a combined beanmeta.idx, registered via [[resourceGenerators]] so it lands
+ *  in the packaged JAR automatically. Test-scope beangle.xml is supported via `Test / metaIndex`.
  *
  *  Runtime lookup: [[org.beangle.commons.bean.meta.MetaModels]] reads
  *  `classpath*:META-INF/beangle/beanmeta.idx` at startup.
@@ -54,7 +51,7 @@ object MetaPlugin extends sbt.AutoPlugin {
 
   import autoImport.*
 
-  override def trigger = noTrigger
+  override def trigger = allRequirements
 
   override val projectSettings: Seq[Setting[?]] = Seq(
     Compile / metaIndex := Def.uncached {
@@ -96,13 +93,13 @@ object MetaPlugin extends sbt.AutoPlugin {
    */
   private def generate(beangleXml: File, listFile: File, classesDir: File, output: File, classpath: Seq[File], log: Logger): Option[File] = {
     if (!beangleXml.isFile) {
-      log.info(s"No $BeangleXmlName found; beanmeta.idx generation skipped")
+      log.debug(s"No $BeangleXmlName found; beanmeta.idx generation skipped")
       if (output.exists()) output.delete()
       return None
     }
     val classNames = extractModuleClasses(beangleXml)
     if (classNames.isEmpty) {
-      log.info(s"No mapping/module declared in $beangleXml; beanmeta.idx generation skipped")
+      log.debug(s"No mapping/module declared in $beangleXml; beanmeta.idx generation skipped")
       return None
     }
     writeList(listFile, classNames)

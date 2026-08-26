@@ -25,15 +25,14 @@ import java.io.File
 
 /** Generates GraalVM native-image configuration files from AotHintRegistrar implementations.
   *
-  * Opt-in plugin — enable explicitly in projects that define AotHintRegistrar subclasses:
-  * {{{
-  * // build.sbt
-  * lazy val myModule = (project in file(".")).enablePlugins(AotPlugin)
-  * }}}
+  * Auto-enabled on every JVM project. Generation is driven by the anchor file
+  * `src/main/resources/META-INF/beangle/aot-registrars.txt` (one
+  * [[org.beangle.commons.aot.AotHintRegistrar]] class name per line); projects without it
+  * are skipped without error, so no explicit opt-in is needed.
   *
-  * Scans the Compile classes directory for [[org.beangle.commons.aot.AotHintRegistrar]]
-  * implementations, collects their registrations, and writes GraalVM config files
-  * (reflect-config.json, resource-config.json, proxy-config.json, serialization-config.json).
+  * Loads each declared registrar, collects its registrations, and writes GraalVM config
+  * files (reflect-config.json, resource-config.json, proxy-config.json,
+  * serialization-config.json).
   */
 object AotPlugin extends sbt.AutoPlugin {
 
@@ -47,7 +46,7 @@ object AotPlugin extends sbt.AutoPlugin {
 
   import autoImport.*
 
-  override def trigger = noTrigger
+  override def trigger = allRequirements
 
   override val projectSettings: Seq[Setting[?]] = Seq(
     aotHints := Def.uncached {
@@ -71,7 +70,7 @@ object AotPlugin extends sbt.AutoPlugin {
    */
   private def generate(registrarsFile: File, classesDir: File, outDir: File, classpath: Seq[File], log: Logger): Seq[File] = {
     if (!registrarsFile.isFile) {
-      log.info(s"No $RegistrarsPath found; GraalVM config generation skipped")
+      log.debug(s"No $RegistrarsPath found; GraalVM config generation skipped")
       deleteStaleConfigs(outDir)
       return Nil
     }
