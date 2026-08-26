@@ -51,4 +51,24 @@ private[sbt] object GeneratorSupport {
     }
     Some(ClassesSnapshot(count, latest))
   }
+
+  /** 从 beangle.xml 提取声明类：jpa/orm 的 mapping 与 cdi 的 module（带 class 属性）。 */
+  def extractModuleClasses(beangleXml: File): Seq[String] = {
+    val factory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+    val builder = factory.newDocumentBuilder()
+    val doc = builder.parse(beangleXml)
+    val classNames = scala.collection.mutable.LinkedHashSet.empty[String]
+    def collect(tag: String): Unit = {
+      val nodes = doc.getElementsByTagName(tag)
+      var i = 0
+      while (i < nodes.getLength) {
+        val clazz = nodes.item(i).asInstanceOf[org.w3c.dom.Element].getAttribute("class").trim
+        if (clazz.nonEmpty) classNames += clazz
+        i += 1
+      }
+    }
+    collect("mapping")
+    collect("module")
+    classNames.toSeq
+  }
 }
