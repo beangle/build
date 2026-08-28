@@ -34,12 +34,14 @@ import java.io.File
   * are skipped without error, so no explicit opt-in is needed.
   *
   * Loads each declared registrar, collects its registrations, and writes GraalVM config
-  * files (reflect-config.json, resource-config.json, proxy-config.json,
-  * serialization-config.json, native-image.properties).
+  * files into the `META-INF/native-image/beangle/` subdirectory (reflect-config.json,
+  * resource-config.json, proxy-config.json, serialization-config.json,
+  * native-image.properties) — each framework/plugin owns its own subdirectory, so
+  * configs merge cleanly when multiple libraries are on the classpath.
   */
 object AotPlugin extends sbt.AutoPlugin {
 
-  private val OutputDir = "META-INF/native-image"
+  private val OutputDir = "META-INF/native-image/beangle"
   private val RegistrarsPath = "META-INF/beangle/aot-registrars.txt"
   private val BeangleXmlName = "beangle.xml"
   private val ConfigNames = Seq("reflect-config.json", "resource-config.json", "proxy-config.json", "serialization-config.json", "native-image.properties")
@@ -110,9 +112,12 @@ object AotPlugin extends sbt.AutoPlugin {
     finally w.close()
   }
 
-  /** 删除输出目录中的残留配置文件。 */
+  /** 删除输出目录中的残留配置文件（含迁移前的扁平目录残留）。 */
   private def deleteStaleConfigs(outDir: File): Unit = {
-    ConfigNames.foreach(name => (outDir / name).delete())
+    ConfigNames.foreach { name =>
+      (outDir / name).delete()
+      (outDir.getParentFile / name).delete()
+    }
   }
   /** Runs the generator once; Right(files) 成功产出，Left(GenFailure) 按退出码分类失败。 */
   private def runOnce(registrarsFile: File, outDir: File, cp: String, cpEntries: Seq[String], log: Logger): Either[GeneratorSupport.GenFailure, Seq[File]] = {

@@ -41,7 +41,6 @@ import java.io.File
  *  The generator writes into `Compile / resourceManaged` (packaged with the jar as
  *  resources, so the `.class` files are loadable at runtime):
  *  - the generated proxy `.class` files;
- *  - `META-INF/beangle/proxy-classes.txt` (entity -> proxy mapping);
  *  - a GraalVM `META-INF/native-image/.../reflect-config.json` fragment.
  *
  *  Runtime consumption is done by the fork's `BeangleBytecodeProvider`, which loads the
@@ -50,8 +49,7 @@ import java.io.File
 object ProxyPlugin extends sbt.AutoPlugin {
 
   private val BeangleXmlName = "beangle.xml"
-  private val OutputTxt = "META-INF/beangle/proxy-classes.txt"
-  private val NativeConfigFile = "META-INF/native-image/org/beangle/data/beangle-data-proxy/reflect-config.json"
+  private val NativeConfigFile = "META-INF/native-image/beangle/data/reflect-config.json"
   private val GeneratorMain = "org.beangle.data.hibernate.aot.BeangleProxyGenerator"
   private val HibernateJarMarker = "beangle-data-hibernate"
   private val ByteBuddyClass = "net/bytebuddy/ByteBuddy.class"
@@ -171,7 +169,7 @@ object ProxyPlugin extends sbt.AutoPlugin {
       val exitCode = proc.waitFor()
       reader.join(5000)
       if (exitCode == 0) {
-        val files = Seq(resDir / OutputTxt, resDir / NativeConfigFile).filter(_.exists())
+        val files = Seq(resDir / NativeConfigFile).filter(_.exists())
         if (files.nonEmpty) log.info(s"Generated Hibernate proxies in ${resDir.getAbsolutePath}")
         Right(files)
       } else {
@@ -245,17 +243,19 @@ object ProxyPlugin extends sbt.AutoPlugin {
     finally w.close()
   }
 
-  /** 删除输出目录中的残留映射、配置与上次生成的代理类（实体集合缩小时不残留旧代理）。 */
+  /** 删除输出目录中的残留配置与上次生成的代理类（实体集合缩小时不残留旧代理）。 */
   private def deleteStale(resDir: File): Unit = {
-    val mapping = resDir / OutputTxt
-    if (mapping.isFile) {
-      val lines = java.nio.file.Files.readAllLines(mapping.toPath, java.nio.charset.StandardCharsets.UTF_8)
-      lines.forEach { line =>
-        val parts = line.trim.split("\\s+")
-        if (parts.length == 2) (resDir / (parts(1).replace('.', '/') + ".class")).delete()
-      }
-    }
-    mapping.delete()
     (resDir / NativeConfigFile).delete()
+    (resDir / "META-INF/native-image/org/beangle/data/beangle-data-proxy/reflect-config.json").delete() // 迁移前旧布局
+    deleteProxyClasses(resDir)
+  }
+
+  /** 递归删除按命名约定生成的 `<Entity>$HibernateProxy.class`（命名固定，无需清单文件）。 */
+  private def deleteProxyClasses(dir: File): Unit = {
+    val children = Option(dir.listFiles()).toSeq.flatten
+    children foreach { f =>
+      if (f.isDirectory) deleteProxyClasses(f)
+      else if (f.getName.endsWith("$HibernateProxy.class")) f.delete()
+    }
   }
 }
