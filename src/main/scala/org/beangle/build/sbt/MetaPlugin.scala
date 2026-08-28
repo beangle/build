@@ -156,9 +156,9 @@ object MetaPlugin extends sbt.AutoPlugin {
           Right(None)
         }
       } else {
-        val summary = out.toString.linesIterator.filter(_.nonEmpty).toSeq.lastOption.getOrElse(s"exited with code $exitCode")
-        log.debug(s"MetaGenerator exited with code $exitCode:\n$out")
-        Left(GeneratorSupport.GenFailure(exitCode, summary))
+        val output = out.toString
+        log.debug(s"MetaGenerator exited with code $exitCode:\n$output")
+        Left(GeneratorSupport.GenFailure.of(exitCode, output))
       }
     } catch {
       case e: Exception =>

@@ -53,6 +53,7 @@ object ProxyPlugin extends sbt.AutoPlugin {
   private val GeneratorMain = "org.beangle.data.hibernate.aot.BeangleProxyGenerator"
   private val HibernateJarMarker = "beangle-data-hibernate"
   private val ByteBuddyClass = "net/bytebuddy/ByteBuddy.class"
+  private val ByteBuddyVersion = "1.18.8"
 
   object autoImport {
     val proxyClasses = taskKey[Seq[File]]("Generate Hibernate lazy-loading proxy classes from beangle.xml jpa/orm mappings")
@@ -130,19 +131,17 @@ object ProxyPlugin extends sbt.AutoPlugin {
       return Nil
     }
     writeList(listFile, classNames)
-    // sbt 2 的虚拟路径条目（如 coursier ${CSR_CACHE} 引用）转换后可能不存在，过滤掉避免 java -cp 解析失败
-    val cpEntries = classpath.filter(_.exists()).map(_.getAbsolutePath)
-    val cp = cpEntries.mkString(File.pathSeparator)
-    // post-compile 运行，类基本就绪；退出码 2（声明类未找到）仅作短时重试兜底
-    // （sbt 2 的 classDirectory 物化可能晚于编译完成），退出码 1 立即失败。
+    // sbt 2 的虚拟路径条目（如 coursier ${CSR_CACHE} 引用）转换后可能不存在，过滤掉避免 java -cp 解析失败。
+    // classpath 快照在每次重试内重算：依赖项目的 classDirectory 物化可能晚于编译完成，
+    // 首次 fork 时尚未出现的目录在下次尝试即可用。
     GeneratorSupport.retryGenerator(10, 500L, "BeangleProxyGenerator", log) {
-      runOnce(listFile, resDir, cp, cpEntries, log)
+      runOnce(listFile, resDir, classpath.filter(_.exists()).map(_.getAbsolutePath), log)
     }
   }
 
   /** Runs the generator once; Right(files) 成功产出，Left(GenFailure) 按退出码分类失败。 */
   private def runOnce(listFile: File, resDir: File,
-      cp: String, cpEntries: Seq[String], log: Logger): Either[GeneratorSupport.GenFailure, Seq[File]] = {
+      cpEntries: Seq[String], log: Logger): Either[GeneratorSupport.GenFailure, Seq[File]] = {
     try {
       // 清掉上次残留产物，避免失败/跳过时把旧映射打进 jar
       deleteStale(resDir)
@@ -173,9 +172,9 @@ object ProxyPlugin extends sbt.AutoPlugin {
         if (files.nonEmpty) log.info(s"Generated Hibernate proxies in ${resDir.getAbsolutePath}")
         Right(files)
       } else {
-        val summary = out.toString.linesIterator.filter(_.nonEmpty).toSeq.lastOption.getOrElse(s"exited with code $exitCode")
-        log.debug(s"BeangleProxyGenerator exited with code $exitCode:\n$out")
-        Left(GeneratorSupport.GenFailure(exitCode, summary))
+        val output = out.toString
+        log.debug(s"BeangleProxyGenerator exited with code $exitCode:\n$output")
+        Left(GeneratorSupport.GenFailure.of(exitCode, output))
       }
     } catch {
       case e: Exception =>
@@ -220,20 +219,21 @@ object ProxyPlugin extends sbt.AutoPlugin {
     } catch { case _: Exception => None }
   }
 
-  /** 从 coursier/ivy 缓存定位 byte-buddy jar（取最高版本），缓存布局与依赖解析一致。 */
+  /** 从 coursier/ivy 缓存定位 byte-buddy jar：优先固定版本 1.18.8（与 hibernate 7.4 的
+   *  ByteBuddyProxyHelper 编译版本一致），缺失时退避到最高版本。 */
   private def coursierByteBuddy(): Option[File] = {
     val home = System.getProperty("user.home")
     val candidates = Seq(
       new File(home, ".cache/coursier/v1/https/repo1.maven.org/maven2/net/bytebuddy/byte-buddy"),
       new File(home, ".ivy2/cache/net.bytebuddy/byte-buddy/jars"))
-    candidates.flatMap { dir =>
+    val jars = candidates.flatMap { dir =>
       if (!dir.isDirectory) None
       else Option(dir.listFiles()).toSeq.flatten
         .filter(f => f.getName.startsWith("byte-buddy-") && f.getName.endsWith(".jar") &&
           !f.getName.contains("-sources") && !f.getName.contains("-javadoc"))
-        .sortBy(_.getName)
-        .lastOption
-    }.headOption
+    }
+    jars.find(_.getName == s"byte-buddy-$ByteBuddyVersion.jar")
+      .orElse(jars.sortBy(_.getName).lastOption)
   }
 
   private def writeList(file: File, classNames: Seq[String]): Unit = {

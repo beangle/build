@@ -27,6 +27,18 @@ private[sbt] object GeneratorSupport {
   /** 生成器子进程失败结果：exitCode 1 为确定性违约，2 为声明类未找到（编译/类物化未完成，可短时重试）。 */
   case class GenFailure(exitCode: Int, summary: String)
 
+  object GenFailure {
+    /** 归类子进程失败：退出码 2（声明类未找到）与输出含 ClassNotFoundException/NoClassDefFoundError
+     * （生成器 main 类或其加载期依赖未就绪，如 sbt 2 依赖项目 classes 未物化）视为可重试（统一为 2），
+     * 其余为确定性失败（1）。 */
+    def of(exitCode: Int, output: String): GenFailure = {
+      val summary = output.linesIterator.filter(_.nonEmpty).toSeq.lastOption.getOrElse(s"exited with code $exitCode")
+      val retryable = exitCode == 2 ||
+        output.contains("ClassNotFoundException") || output.contains("NoClassDefFoundError")
+      GenFailure(if (retryable) 2 else 1, summary)
+    }
+  }
+
   /** 以生成器退出码驱动重试：0 成功、1 确定性失败立即报错、
    *  2（声明类未找到）静默退避重试直到 maxAttempts。
    *

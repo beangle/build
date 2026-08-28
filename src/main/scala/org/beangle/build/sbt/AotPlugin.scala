@@ -148,9 +148,9 @@ object AotPlugin extends sbt.AutoPlugin {
         if (files.nonEmpty) log.info(s"Generated GraalVM configs in ${outDir.getAbsolutePath}")
         Right(files)
       } else {
-        val summary = out.toString.linesIterator.filter(_.nonEmpty).toSeq.lastOption.getOrElse(s"exited with code $exitCode")
-        log.debug(s"AotHintGenerator exited with code $exitCode:\n$out")
-        Left(GeneratorSupport.GenFailure(exitCode, summary))
+        val output = out.toString
+        log.debug(s"AotHintGenerator exited with code $exitCode:\n$output")
+        Left(GeneratorSupport.GenFailure.of(exitCode, output))
       }
     } catch {
       case e: Exception =>
