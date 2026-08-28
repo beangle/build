@@ -17,6 +17,7 @@
 
 package org.beangle.build.sbt
 
+import CompileHookPlugin.autoImport.*
 import sbt.*
 import sbt.Keys.*
 import xsbti.FileConverter
@@ -66,8 +67,9 @@ object AotPlugin extends sbt.AutoPlugin {
       val listFile = (Compile / target).value / "aot" / "aot-registrars.txt"
       generate(registrarsFile, beangleXml, listFile, outDir, classpath, streams.value.log)
     },
-    Compile / resourceGenerators += Def.task {
-      aotHints.value
+    Compile / compilePostHooks += Def.task {
+      (Compile / aotHints).value
+      ()
     }.taskValue
   )
 
@@ -86,9 +88,9 @@ object AotPlugin extends sbt.AutoPlugin {
     writeList(listFile, declared.toSeq)
     val cpEntries = classpath.map(_.getAbsolutePath)
     val cp = cpEntries.mkString(File.pathSeparator)
-    // resources 与 compileIncremental 并行调度，首次编译较慢：生成器对"声明类未找到"
-    // 退出码 2 静默报告（不打印异常），这里退避重试；确定性违约（退出码 1）立即报错。
-    GeneratorSupport.retryGenerator(10, 3000L, "AotHintGenerator", log) {
+    // post-compile 运行，类基本就绪；退出码 2（声明类未找到）仅作短时重试兜底
+    // （sbt 2 的 classDirectory 物化可能晚于编译完成），退出码 1 立即失败。
+    GeneratorSupport.retryGenerator(10, 500L, "AotHintGenerator", log) {
       runOnce(listFile, outDir, cp, cpEntries, log)
     }
   }

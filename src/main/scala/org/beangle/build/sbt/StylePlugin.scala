@@ -20,6 +20,7 @@ package org.beangle.build.sbt
 import org.beangle.build.style.Style
 import org.beangle.build.style.license.*
 import org.beangle.build.style.ws.WsOptions
+import CompileHookPlugin.autoImport.*
 import sbt.Keys.*
 import sbt.*
 
@@ -59,18 +60,17 @@ object StylePlugin extends sbt.AutoPlugin {
     inConfig(Compile)(styleTaskSettings) ++
       inConfig(Test)(styleTaskSettings) ++
       stylePackageSettings ++
-      // Auto style check before Compile/compile. Only current config dirs are scanned
+      // Auto style check before compile, via the shared CompileHookPlugin pre-hooks
+      // (the plugin itself owns the Compile/Test compile override — multiple plugins
+      // must not override the same key). Only current config dirs are scanned
       // (crossing into Test dirs from Compile deadlocks Test/compile on sbt 2).
-      // Avoid Def.uncached(self.dependsOn(...).value) — also deadlocks on sbt 2.
       Seq(
-        Compile / compile := Def.uncached {
+        Compile / compilePreHooks += Def.task {
           (Compile / styleCheck).value
-          (Compile / compile).value
-        },
-        Test / compile := Def.uncached {
+        }.taskValue,
+        Test / compilePreHooks += Def.task {
           (Test / styleCheck).value
-          (Test / compile).value
-        }
+        }.taskValue
       )
 
   private lazy val checkInConfig =

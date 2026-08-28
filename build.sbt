@@ -21,11 +21,12 @@ developers := List(
 )
 
 val apache_commons_compress = "org.apache.commons" % "commons-compress" % "1.28.0"
+val byte_buddy = "net.bytebuddy" % "byte-buddy" % "1.18.8"
 
 lazy val root = (project in file("."))
   .enablePlugins(SbtPlugin)
   .settings(
     name := "sbt-beangle-build",
-    libraryDependencies ++= Seq(apache_commons_compress),
+    libraryDependencies ++= Seq(apache_commons_compress, byte_buddy),
     commonSettings
   )

@@ -19,6 +19,7 @@ package org.beangle.build.sbt
 
 import org.beangle.build.boot.Dependency
 import org.beangle.build.util.Files
+import CompileHookPlugin.autoImport.*
 import sbt.*
 import sbt.Keys.*
 import sbt.librarymanagement.{Artifact, ConfigRef, ModuleReport, UpdateReport}
@@ -74,9 +75,11 @@ object BootPlugin extends sbt.AutoPlugin {
       val gavs = selectBootGavs(update.value, selfCoord = organization.value + ":" + name.value)
       Some(writeDependenciesFile(out, gavs, streams.value.log))
     },
-    // Package via resourceGenerators — never redefine packageBin with Def.uncached self-ref (sbt 2 hang).
-    Compile / resourceGenerators += Def.task {
-      bootDependencies.value.toSeq
+    // Post-compile hook: generated file lands in resourceManaged and is packaged via
+    // resourceDirectories (never redefine packageBin with Def.uncached self-ref — sbt 2 hang).
+    Compile / compilePostHooks += Def.task {
+      bootDependencies.value
+      ()
     }.taskValue,
     // Local Maven repo of jars that actually exist (resolver + exported siblings).
     bootRepo := Def.uncached {

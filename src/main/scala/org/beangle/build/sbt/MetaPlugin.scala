@@ -17,6 +17,7 @@
 
 package org.beangle.build.sbt
 
+import CompileHookPlugin.autoImport.*
 import sbt.*
 import sbt.Keys.*
 import xsbti.FileConverter
@@ -32,8 +33,9 @@ import java.io.File
  *  Reads `beangle.xml` for declared modules (`<jpa>/<orm><mapping class>` and
  *  `<cdi><module class>`, all MetaRegistrar subclasses such as MappingModule/BindModule)
  *  as the contract: every declared class must be found, otherwise generation fails with an
- *  error. Writes a combined beanmeta.idx, registered via [[resourceGenerators]] so it lands
- *  in the packaged JAR automatically. Test-scope beangle.xml is supported via `Test / metaIndex`.
+ *  error. Writes a combined beanmeta.idx into `resourceManaged`; [[CompileHookPlugin]]
+ *  drives it as a post-compile hook so it lands in the packaged JAR automatically.
+ *  Test-scope beangle.xml is supported via `Test / metaIndex`.
  *
  *  Runtime lookup: [[org.beangle.commons.bean.meta.MetaModels]] reads
  *  `classpath*:META-INF/beangle/beanmeta.idx` at startup.
@@ -66,11 +68,12 @@ object MetaPlugin extends sbt.AutoPlugin {
       val classpath = CpFiles.files((Runtime / externalDependencyClasspath).value) ++ depClasses :+ classesDir
       generate(beangleXml, listFile, outputPath, classpath, streams.value.log)
     },
-    Compile / resourceGenerators += Def.task {
-      (Compile / metaIndex).value.toSeq
+    Compile / compilePostHooks += Def.task {
+      (Compile / metaIndex).value
+      ()
     }.taskValue,
     Test / metaIndex := Def.uncached {
-      (Test / compile).value
+      // 编译时序由 Test / compilePostHooks 保证（compile 完成后执行），这里不能再依赖 compile，否则成环
       given FileConverter = fileConverter.value
       val classesDir = (Test / classDirectory).value
       val outDir = (Test / resourceManaged).value
@@ -82,8 +85,9 @@ object MetaPlugin extends sbt.AutoPlugin {
       val classpath = CpFiles.files((Test / externalDependencyClasspath).value) ++ depClasses :+ mainClasses :+ classesDir
       generate(beangleXml, listFile, outputPath, classpath, streams.value.log)
     },
-    Test / resourceGenerators += Def.task {
-      (Test / metaIndex).value.toSeq
+    Test / compilePostHooks += Def.task {
+      (Test / metaIndex).value
+      ()
     }.taskValue
   )
 
@@ -105,9 +109,9 @@ object MetaPlugin extends sbt.AutoPlugin {
     writeList(listFile, classNames)
     val cpEntries = classpath.map(_.getAbsolutePath)
     val cp = cpEntries.mkString(File.pathSeparator)
-    // 与 AotPlugin 同理：生成器对"声明类未找到"退出码 2 静默报告，这里退避重试；
-    // 确定性违约（退出码 1）立即报错。
-    GeneratorSupport.retryGenerator(10, 3000L, "MetaGenerator", log) {
+    // post-compile 运行，类基本就绪；退出码 2（声明类未找到）仅作短时重试兜底
+    // （sbt 2 的 classDirectory 物化可能晚于编译完成），退出码 1 立即失败。
+    GeneratorSupport.retryGenerator(10, 500L, "MetaGenerator", log) {
       runOnce(listFile, output, cp, cpEntries, log)
     }
   }
