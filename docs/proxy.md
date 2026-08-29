@@ -45,7 +45,7 @@ native-image 下的限制。
 
 ## 运行时
 
-beangle-data-hibernate 的 `BeangleBytecodeProvider` 按命名约定直接按类名加载
+beangle-data-hibernate 的 `PrebuiltProxyProvider` 按命名约定直接按类名加载
 预生成代理，JVM 与 native-image 共用同一路径。
 
 ## 示例

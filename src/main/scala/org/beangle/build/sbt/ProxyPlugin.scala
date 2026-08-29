@@ -43,7 +43,7 @@ import java.io.File
  *  - the generated proxy `.class` files;
  *  - a GraalVM `META-INF/native-image/.../reflect-config.json` fragment.
  *
- *  Runtime consumption is done by the fork's `BeangleBytecodeProvider`, which loads the
+ *  Runtime consumption is done by the fork's `PrebuiltProxyProvider`, which loads the
  *  pre-generated classes by name (JVM and native share the same path).
  */
 object ProxyPlugin extends sbt.AutoPlugin {
