@@ -63,9 +63,9 @@ object MetaPlugin extends sbt.AutoPlugin {
       val outputPath = outDir / OutputPath
       val beangleXml = (Compile / resourceDirectory).value / BeangleXmlName
       val listFile = (Compile / target).value / "meta" / "beanmeta-registrars.txt"
-      // 外部依赖 + 依赖项目 classes + 本模块 classes，避免 resourceGenerators 环（见 AotPlugin）
+      // 本模块 classes 放最前（与运行期 classpath 语义一致），避免依赖项目同名资源遮蔽，见 AotPlugin
       val depClasses = (Compile / classDirectory).all(ScopeFilter(inDependencies(ThisProject))).value
-      val classpath = CpFiles.files((Runtime / externalDependencyClasspath).value) ++ depClasses :+ classesDir
+      val classpath = classesDir +: (CpFiles.files((Runtime / externalDependencyClasspath).value) ++ depClasses)
       generate(beangleXml, listFile, outputPath, classpath, streams.value.log)
     },
     Compile / compilePostHooks += Def.task {
@@ -82,7 +82,7 @@ object MetaPlugin extends sbt.AutoPlugin {
       val listFile = (Test / target).value / "meta" / "beanmeta-registrars.txt"
       val mainClasses = (Compile / classDirectory).value
       val depClasses = (Compile / classDirectory).all(ScopeFilter(inDependencies(ThisProject))).value
-      val classpath = CpFiles.files((Test / externalDependencyClasspath).value) ++ depClasses :+ mainClasses :+ classesDir
+      val classpath = classesDir +: (mainClasses +: (CpFiles.files((Test / externalDependencyClasspath).value) ++ depClasses))
       generate(beangleXml, listFile, outputPath, classpath, streams.value.log)
     },
     Test / compilePostHooks += Def.task {

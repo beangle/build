@@ -37,7 +37,7 @@ native-image 下的限制。
 
 ## 机制
 
-- fork 子进程 `org.beangle.data.hibernate.aot.BeangleProxyGenerator`；
+- fork 子进程 `org.beangle.data.hibernate.proxy.BeangleProxyGenerator`；
 - 生成器 classpath 会附加构建插件自带的 `net.bytebuddy:byte-buddy` jar——应用运行期
   可以排除 ByteBuddy，不影响构建期生成；
 - 退出码 `2`（声明类未找到）短暂重试最多 10 次，退出码 `1` 立即失败；

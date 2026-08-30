@@ -59,11 +59,11 @@ object AotPlugin extends sbt.AutoPlugin {
       given FileConverter = fileConverter.value
       val classesDir = (Compile / classDirectory).value
       val outDir = (Compile / resourceManaged).value / OutputDir
-      // 外部依赖 + 依赖项目 classes + 本模块 classes。
+      // 本模块 classes + 外部依赖 + 依赖项目 classes（本模块优先，与运行期 classpath 语义一致）。
       // 不能读 fullClasspath/dependencyClasspath：sbt 2 中它们含本模块 products（exportJars 时为
       // packageBin），resourceGenerators 再依赖它们会形成 resources -> packageBin -> resources 环而卡死。
       val depClasses = (Compile / classDirectory).all(ScopeFilter(inDependencies(ThisProject))).value
-      val classpath = CpFiles.files((Runtime / externalDependencyClasspath).value) ++ depClasses :+ classesDir
+      val classpath = classesDir +: (CpFiles.files((Runtime / externalDependencyClasspath).value) ++ depClasses)
       val registrarsFile = (Compile / resourceDirectory).value / RegistrarsPath
       val beangleXml = (Compile / resourceDirectory).value / BeangleXmlName
       val listFile = (Compile / target).value / "aot" / "aot-registrars.txt"

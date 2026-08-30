@@ -33,7 +33,7 @@ import java.io.File
  *    the module itself).
  *  Projects without either are skipped without error, so no explicit opt-in is needed.
  *
- *  Forks `org.beangle.data.hibernate.aot.BeangleProxyGenerator` with the project classpath
+ *  Forks `org.beangle.data.hibernate.proxy.BeangleProxyGenerator` with the project classpath
  *  (plus the build plugin's own `net.bytebuddy:byte-buddy` jar, since applications may
  *  exclude ByteBuddy at runtime). Runs as a post-compile hook ([[CompileHookPlugin]]),
  *  so the classes are compiled before generation; exit-code-2 (declared class not
@@ -50,10 +50,10 @@ object ProxyPlugin extends sbt.AutoPlugin {
 
   private val BeangleXmlName = "beangle.xml"
   private val NativeConfigFile = "META-INF/native-image/beangle/data/reflect-config.json"
-  private val GeneratorMain = "org.beangle.data.hibernate.aot.BeangleProxyGenerator"
+  private val GeneratorMain = "org.beangle.data.hibernate.proxy.BeangleProxyGenerator"
   private val HibernateJarMarker = "beangle-data-hibernate"
   private val ByteBuddyClass = "net/bytebuddy/ByteBuddy.class"
-  private val ByteBuddyVersion = "1.18.8"
+  private val ByteBuddyVersion = "1.18.12"
 
   object autoImport {
     val proxyClasses = taskKey[Seq[File]]("Generate Hibernate lazy-loading proxy classes from beangle.xml jpa/orm mappings")
@@ -77,7 +77,7 @@ object ProxyPlugin extends sbt.AutoPlugin {
         val resDir = (Compile / resourceManaged).value
         val listFile = (Compile / target).value / "proxy" / "proxy-registrars.txt"
         val depClasses = (Compile / classDirectory).all(ScopeFilter(inDependencies(ThisProject))).value
-        val classpath = CpFiles.files((Runtime / externalDependencyClasspath).value) ++ depClasses :+ classesDir
+        val classpath = classesDir +: (CpFiles.files((Runtime / externalDependencyClasspath).value) ++ depClasses)
         if (!hasHibernate(classpath)) {
           log.debug(s"No beangle-data-hibernate on classpath; Hibernate proxy generation skipped")
           deleteStale(resDir)
@@ -104,7 +104,7 @@ object ProxyPlugin extends sbt.AutoPlugin {
         val listFile = (Test / target).value / "proxy" / "proxy-registrars.txt"
         val mainClasses = (Compile / classDirectory).value
         val depClasses = (Compile / classDirectory).all(ScopeFilter(inDependencies(ThisProject))).value
-        val classpath = CpFiles.files((Test / externalDependencyClasspath).value) ++ depClasses :+ mainClasses :+ classesDir
+        val classpath = classesDir +: (mainClasses +: (CpFiles.files((Test / externalDependencyClasspath).value) ++ depClasses))
         if (!hasHibernate(classpath)) {
           log.debug(s"No beangle-data-hibernate on test classpath; Hibernate proxy generation skipped")
           deleteStale(resDir)
