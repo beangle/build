@@ -74,10 +74,29 @@ private[sbt] object GeneratorSupport {
     extractClasses(beangleXml, Seq("mapping"))
   }
 
+  /** 从 beangle.xml 提取 web 模块的 initializer 类（`<web><initializer class="..."/>`，
+   * 仅 web 元素下的 initializer，供 AotPlugin 以 public 构造器注册反射配置）。 */
+  def extractWebInitializerClasses(beangleXml: File): Seq[String] = {
+    val doc = parseXml(beangleXml)
+    val classNames = scala.collection.mutable.LinkedHashSet.empty[String]
+    val webs = doc.getElementsByTagName("web")
+    var i = 0
+    while (i < webs.getLength) {
+      val web = webs.item(i).asInstanceOf[org.w3c.dom.Element]
+      val initializers = web.getElementsByTagName("initializer")
+      var j = 0
+      while (j < initializers.getLength) {
+        val clazz = initializers.item(j).asInstanceOf[org.w3c.dom.Element].getAttribute("class").trim
+        if (clazz.nonEmpty) classNames += clazz
+        j += 1
+      }
+      i += 1
+    }
+    classNames.toSeq
+  }
+
   private def extractClasses(beangleXml: File, tags: Seq[String]): Seq[String] = {
-    val factory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
-    val builder = factory.newDocumentBuilder()
-    val doc = builder.parse(beangleXml)
+    val doc = parseXml(beangleXml)
     val classNames = scala.collection.mutable.LinkedHashSet.empty[String]
     def collect(tag: String): Unit = {
       val nodes = doc.getElementsByTagName(tag)
@@ -90,5 +109,11 @@ private[sbt] object GeneratorSupport {
     }
     tags foreach collect
     classNames.toSeq
+  }
+
+  private def parseXml(beangleXml: File): org.w3c.dom.Document = {
+    val factory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+    val builder = factory.newDocumentBuilder()
+    builder.parse(beangleXml)
   }
 }
