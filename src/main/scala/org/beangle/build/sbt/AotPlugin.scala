@@ -69,8 +69,8 @@ object AotPlugin extends sbt.AutoPlugin {
       val registrarsFile = (Compile / resourceDirectory).value / RegistrarsPath
       val beangleXml = (Compile / resourceDirectory).value / BeangleXmlName
       val listFile = (Compile / target).value / "aot" / "aot-registrars.txt"
-      val initializersFile = (Compile / target).value / "aot" / "aot-initializers.txt"
-      generate(registrarsFile, beangleXml, listFile, initializersFile, outDir, classpath, streams.value.log)
+      val classesFile = (Compile / target).value / "aot" / "aot-classes.txt"
+      generate(registrarsFile, beangleXml, listFile, classesFile, outDir, classpath, streams.value.log)
     },
     Compile / compilePostHooks += Def.task {
       (Compile / aotHints).value
@@ -79,29 +79,29 @@ object AotPlugin extends sbt.AutoPlugin {
   )
 
   /** 合并 aot-registrars.txt 与 beangle.xml（jpa/orm mapping、cdi module）声明的
-   * AotHintRegistrar 类、beangle.xml 的 web initializer 类为契约，由
-   * AotHintGenerator 统一生成配置：initializer 不作为 registrar 加载，生成器按名
-   * 注册（public 构造器 + Scala object 伴生类）。两者皆无声明视为"项目无 AOT 提示"，
-   * 正常跳过。
+   * AotHintRegistrar 类、beangle.xml 的 web initializer 类为契约，由 AotHintGenerator
+   * 统一生成配置：initializer 等按名加载类经 --classes 清单传入，不作为 registrar
+   * 加载，生成器注册 public 构造器 + Scala object 伴生类。两者皆无声明视为
+   * "项目无 AOT 提示"，正常跳过。
    */
-  private def generate(registrarsFile: File, beangleXml: File, listFile: File, initializersFile: File, outDir: File, classpath: Seq[File], log: Logger): Seq[File] = {
+  private def generate(registrarsFile: File, beangleXml: File, listFile: File, classesFile: File, outDir: File, classpath: Seq[File], log: Logger): Seq[File] = {
     val declared = scala.collection.mutable.LinkedHashSet.empty[String]
     if (registrarsFile.isFile) readLines(registrarsFile).foreach(declared += _)
     if (beangleXml.isFile) GeneratorSupport.extractModuleClasses(beangleXml).foreach(declared += _)
-    val initializers = if (beangleXml.isFile) GeneratorSupport.extractWebInitializerClasses(beangleXml) else Nil
-    if (declared.isEmpty && initializers.isEmpty) {
+    val classes = if (beangleXml.isFile) GeneratorSupport.extractWebInitializerClasses(beangleXml) else Nil
+    if (declared.isEmpty && classes.isEmpty) {
       log.debug(s"No $RegistrarsPath nor modules in $BeangleXmlName; GraalVM config generation skipped")
       deleteStaleConfigs(outDir)
       return Nil
     }
     writeList(listFile, declared.toSeq)
-    writeList(initializersFile, initializers)
+    writeList(classesFile, classes)
     val cpEntries = classpath.map(_.getAbsolutePath)
     val cp = cpEntries.mkString(File.pathSeparator)
     // post-compile 运行，类基本就绪；退出码 2（声明类未找到）仅作短时重试兜底
     // （sbt 2 的 classDirectory 物化可能晚于编译完成），退出码 1 立即失败。
     GeneratorSupport.retryGenerator(10, 500L, "AotHintGenerator", log) {
-      runOnce(listFile, initializersFile, outDir, cp, cpEntries, log)
+      runOnce(listFile, classesFile, outDir, cp, cpEntries, log)
     }
   }
 
@@ -129,13 +129,13 @@ object AotPlugin extends sbt.AutoPlugin {
   }
 
   /** Runs the generator once; Right(files) 成功产出，Left(GenFailure) 按退出码分类失败。 */
-  private def runOnce(registrarsFile: File, initializersFile: File, outDir: File, cp: String, cpEntries: Seq[String], log: Logger): Either[GeneratorSupport.GenFailure, Seq[File]] = {
+  private def runOnce(registrarsFile: File, classesFile: File, outDir: File, cp: String, cpEntries: Seq[String], log: Logger): Either[GeneratorSupport.GenFailure, Seq[File]] = {
     try {
       // 清掉上次残留配置，避免失败/跳过时把旧产物打包进 jar
       deleteStaleConfigs(outDir)
       val cmd = Seq("java", "-cp", cp, "org.beangle.commons.aot.AotHintGenerator",
         "--registrars", registrarsFile.getAbsolutePath,
-        "--initializers", initializersFile.getAbsolutePath,
+        "--classes", classesFile.getAbsolutePath,
         "-o", outDir.getAbsolutePath) ++ cpEntries
       val pb = new ProcessBuilder(cmd.toArray*)
       log.debug(pb.command().toString)

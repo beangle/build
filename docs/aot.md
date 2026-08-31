@@ -17,9 +17,9 @@ native-image 需要的配置文件，随 jar 打包后在 `native-image` 构建�
   —— `<jpa>/<orm>` 的 `<mapping class="...">` 与 `<cdi>` 的 `<module class="...">`
   声明的类（均为 `MetaRegistrar` 子类，由 MetaRegistrar 汇总 AOT 提示），以及
   `<web>` 的 `<initializer class="...">`——不要求是 `AotHintRegistrar`，由
-  AotHintGenerator 以 `--initializers` 清单按名注册到 `reflect-config.json`。
+  AotHintGenerator 以 `--classes` 清单按名注册到 `reflect-config.json`。
 
-registrar 与 initializer 均无声明时，删除旧的生成产物并跳过，不报错。
+registrar 与 classes（如 web initializer）均无声明时，删除旧的生成产物并跳过，不报错。
 
 ## 任务
 
@@ -45,16 +45,16 @@ registrar 与 initializer 均无声明时，删除旧的生成产物并跳过，
 
 - fork 子进程 `org.beangle.commons.aot.AotHintGenerator`，classpath 为外部依赖 +
   依赖项目 classes + 本模块 classes；插件把两类清单分别写入
-  `target/aot/aot-registrars.txt` 与 `target/aot/aot-initializers.txt`，以
-  `--registrars`/`--initializers` 传给生成器；
+  `target/aot/aot-registrars.txt` 与 `target/aot/aot-classes.txt`，以
+  `--registrars`/`--classes` 传给生成器；
 - `--registrars` 清单：每个类必须是 `AotHintRegistrar` 实现。生成器加载后调用
   `registering()` 收集反射/资源/代理/序列化提示，并把 registrar 类自身注册进
   `reflect-config.json`（普通类注册声明构造器；Scala object 还注册 `$` 伴生类的
   声明构造器 + 声明字段，保证运行期 `getInstance`/`tryGetInstance` 能读 `MODULE$`）；
-- `--initializers` 清单：web initializer 等按名加载类，不要求是 `AotHintRegistrar`。
+- `--classes` 清单：web initializer 等按名加载类，不要求是 `AotHintRegistrar`。
   主类注册 `allPublicConstructors`（运行期经 `getDeclaredConstructor().newInstance()`
   实例化）；由于用户声明的类名不带 `$`、实际可能是 Scala object，生成器同时探测并
-  注册 `$` 伴生类（声明构造器 + 声明字段，`MODULE$` 单例入口）。仅声明 initializer
+  注册 `$` 伴生类（声明构造器 + 声明字段，`MODULE$` 单例入口）。仅声明 classes
   时同样会产出 `reflect-config.json`；两类皆声明时合并写入同一份配置；
 - 退出码：`0` 成功、`1` 确定性失败（如声明类不是 registrar）、`2` 声明类未找到
   （sbt 2 的 classDirectory 物化可能晚于编译完成）会短暂重试最多 10 次。
