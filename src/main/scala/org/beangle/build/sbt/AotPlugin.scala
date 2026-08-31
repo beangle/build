@@ -26,14 +26,15 @@ import java.io.File
 
 /** Generates GraalVM native-image configuration files from AotHintRegistrar implementations.
   *
-  * Auto-enabled on every JVM project. Generation is driven by the anchor file
-  * `src/main/resources/META-INF/beangle/aot-registrars.txt` (one
+  * Auto-enabled on every JVM project. Generation is driven by the anchor files
+  * `src/main/resources/META-INF/beangle/aot-registrars.txt` and
+  * `src/main/resources/META-INF/beangle/meta-registrars.txt` (one
   * [[org.beangle.commons.aot.AotHintRegistrar]] class name per line) plus the modules
   * declared in `src/main/resources/beangle.xml` (`<jpa>/<orm>` mappings and `<cdi>`
   * modules, all AotHintRegistrar subclasses via MetaRegistrar, plus `<web><initializer>`
   * classes which are registered into reflect-config.json by AotHintGenerator — public
   * constructors plus the Scala object companion when the class is actually an object);
-  * projects with neither are skipped without error, so no explicit opt-in is needed.
+  * projects with none of these are skipped without error, so no explicit opt-in is needed.
   *
   * Loads each declared registrar, collects its registrations, and writes GraalVM config
   * files into the `META-INF/native-image/beangle/` subdirectory (reflect-config.json,
@@ -45,11 +46,12 @@ object AotPlugin extends sbt.AutoPlugin {
 
   private val OutputDir = "META-INF/native-image/beangle"
   private val RegistrarsPath = "META-INF/beangle/aot-registrars.txt"
+  private val MetaRegistrarsPath = "META-INF/beangle/meta-registrars.txt"
   private val BeangleXmlName = "beangle.xml"
   private val ConfigNames = Seq("reflect-config.json", "resource-config.json", "proxy-config.json", "serialization-config.json", "native-image.properties")
 
   object autoImport {
-    val aotHints = taskKey[Seq[File]]("Generate GraalVM native-image config files from AotHintRegistrar implementations and beangle.xml web initializers")
+    val aotHints = taskKey[Seq[File]]("Generate GraalVM native-image config files from AotHintRegistrar implementations (aot/meta registrars) and beangle.xml web initializers")
   }
 
   import autoImport.*
@@ -67,10 +69,11 @@ object AotPlugin extends sbt.AutoPlugin {
       val depClasses = (Compile / classDirectory).all(ScopeFilter(inDependencies(ThisProject))).value
       val classpath = classesDir +: (CpFiles.files((Runtime / externalDependencyClasspath).value) ++ depClasses)
       val registrarsFile = (Compile / resourceDirectory).value / RegistrarsPath
+      val metaRegistrarsFile = (Compile / resourceDirectory).value / MetaRegistrarsPath
       val beangleXml = (Compile / resourceDirectory).value / BeangleXmlName
       val listFile = (Compile / target).value / "aot" / "aot-registrars.txt"
       val classesFile = (Compile / target).value / "aot" / "aot-classes.txt"
-      generate(registrarsFile, beangleXml, listFile, classesFile, outDir, classpath, streams.value.log)
+      generate(registrarsFile, metaRegistrarsFile, beangleXml, listFile, classesFile, outDir, classpath, streams.value.log)
     },
     Compile / compilePostHooks += Def.task {
       (Compile / aotHints).value
@@ -78,19 +81,17 @@ object AotPlugin extends sbt.AutoPlugin {
     }.taskValue
   )
 
-  /** 合并 aot-registrars.txt 与 beangle.xml（jpa/orm mapping、cdi module）声明的
-   * AotHintRegistrar 类、beangle.xml 的 web initializer 类为契约，由 AotHintGenerator
-   * 统一生成配置：initializer 等按名加载类经 --classes 清单传入，不作为 registrar
-   * 加载，生成器注册 public 构造器 + Scala object 伴生类。两者皆无声明视为
-   * "项目无 AOT 提示"，正常跳过。
+  /** 合并 aot-registrars.txt、meta-registrars.txt 与 beangle.xml（jpa/orm mapping、cdi
+   * module）声明的 AotHintRegistrar 类、beangle.xml 的 web initializer 类为契约，由
+   * AotHintGenerator 统一生成配置：initializer 等按名加载类经 --classes 清单传入，
+   * 不作为 registrar 加载，生成器注册 public 构造器 + Scala object 伴生类。三者皆无
+   * 声明视为"项目无 AOT 提示"，正常跳过。
    */
-  private def generate(registrarsFile: File, beangleXml: File, listFile: File, classesFile: File, outDir: File, classpath: Seq[File], log: Logger): Seq[File] = {
-    val declared = scala.collection.mutable.LinkedHashSet.empty[String]
-    if (registrarsFile.isFile) readLines(registrarsFile).foreach(declared += _)
-    if (beangleXml.isFile) GeneratorSupport.extractModuleClasses(beangleXml).foreach(declared += _)
-    val classes = if (beangleXml.isFile) GeneratorSupport.extractWebInitializerClasses(beangleXml) else Nil
+  private def generate(registrarsFile: File, metaRegistrarsFile: File, beangleXml: File, listFile: File, classesFile: File, outDir: File, classpath: Seq[File], log: Logger): Seq[File] = {
+    val declared = collectRegistrars(registrarsFile, metaRegistrarsFile, beangleXml)
+    val classes = collectClasses(beangleXml)
     if (declared.isEmpty && classes.isEmpty) {
-      log.debug(s"No $RegistrarsPath nor modules in $BeangleXmlName; GraalVM config generation skipped")
+      log.debug(s"No $RegistrarsPath/$MetaRegistrarsPath nor modules in $BeangleXmlName; GraalVM config generation skipped")
       deleteStaleConfigs(outDir)
       return Nil
     }
@@ -103,6 +104,21 @@ object AotPlugin extends sbt.AutoPlugin {
     GeneratorSupport.retryGenerator(10, 500L, "AotHintGenerator", log) {
       runOnce(listFile, classesFile, outDir, cp, cpEntries, log)
     }
+  }
+
+  /** 合并 aot-registrars.txt、meta-registrars.txt 与 beangle.xml（mapping/module）声明的
+   * AotHintRegistrar 类，去重保序。 */
+  private[sbt] def collectRegistrars(aotRegistrarsFile: File, metaRegistrarsFile: File, beangleXml: File): Seq[String] = {
+    val classNames = scala.collection.mutable.LinkedHashSet.empty[String]
+    if (aotRegistrarsFile.isFile) readLines(aotRegistrarsFile).foreach(classNames += _)
+    if (metaRegistrarsFile.isFile) readLines(metaRegistrarsFile).foreach(classNames += _)
+    if (beangleXml.isFile) GeneratorSupport.extractModuleClasses(beangleXml).foreach(classNames += _)
+    classNames.toSeq
+  }
+
+  /** 从 beangle.xml 提取 web initializer 类（classes 清单，不要求是 AotHintRegistrar）。 */
+  private[sbt] def collectClasses(beangleXml: File): Seq[String] = {
+    if (beangleXml.isFile) GeneratorSupport.extractWebInitializerClasses(beangleXml) else Nil
   }
 
   /** 读取清单文件：每行一个类名，# 开头为注释，忽略空行。 */
