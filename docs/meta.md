@@ -1,10 +1,10 @@
 # MetaPlugin Bean 元数据索引生成
 
-自动启用（`trigger = allRequirements`）；项目中没有 `beangle.xml` 时自动跳过。
+自动启用（`trigger = allRequirements`）；项目中没有声明锚点时自动跳过。
 
 ## 用途
 
-把 `beangle.xml` 中声明的 ORM 映射与 CDI 模块类（`MetaRegistrar` 子类，如
+把声明文件中的 ORM 映射、CDI 模块与注册器类（`MetaRegistrar` 子类，如
 `MappingModule` / `BindModule`）作为契约，生成 `META-INF/beangle/beanmeta.idx` 索引文件。
 
 运行时由 beangle-commons 的 `MetaModels` 通过
@@ -13,10 +13,13 @@
 
 ## 锚点文件
 
-- `src/main/resources/beangle.xml`（Compile）；
-- `src/test/resources/beangle.xml`（Test，可选）。
+- `src/main/resources/META-INF/beangle/meta-registrars.txt`（Compile）
+  —— 每行一个 `MetaRegistrar` 实现类名，`#` 开头为注释；
+- `src/main/resources/beangle.xml`（Compile）
+  —— `<jpa>/<orm>` 的 `<mapping class="...">` 与 `<cdi>` 的 `<module class="...">`；
+- 对应 Test 作用域文件（`src/test/resources/...`，可选）。
 
-`beangle.xml` 缺失或未声明任何 mapping/module 时删除旧产物并跳过。
+两类声明合并为一个注册器清单；均缺失或未声明任何类时删除旧产物并跳过。
 
 ## 任务
 
