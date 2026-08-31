@@ -59,6 +59,29 @@ registrar 与 classes（如 web initializer）均无声明时，删除旧的生�
 - 退出码：`0` 成功、`1` 确定性失败（如声明类不是 registrar）、`2` 声明类未找到
   （sbt 2 的 classDirectory 物化可能晚于编译完成）会短暂重试最多 10 次。
 
+## 清单文件设计
+
+插件不把类名直接作为命令行参数传给生成器，而是先合并出两份清单文件
+（`target/aot/aot-registrars.txt`、`target/aot/aot-classes.txt`），再以
+`--registrars`/`--classes` 传入。原因如下：
+
+- **多来源合并**：registrars 由 `aot-registrars.txt` 与 `beangle.xml`
+  （jpa/orm mapping、cdi module）合并，classes 由 `<web><initializer>` 提取。
+  插件负责解析、去重、合并成一份纯清单，生成器只消费清单本身，双方职责分离；
+  将来新增声明来源（如其他模块的按名加载类）只需改插件侧合并逻辑，生成器不变。
+- **命令行长度**：大型应用的类清单可能数百上千行，Windows 命令行上限 8191 字符、
+  Linux 单参数 `MAX_ARG_STRLEN` 128KB，直接传参有截断风险；文件传递不受限制。
+- **稳定契约与重试**：sbt 2 下 classDirectory 物化可能晚于编译完成，生成器以退出码
+  `2` 报告"声明类未找到"，插件复用同一份清单文件短时重试，清单不随调用变化，
+  重试结果确定；清单落在 `target/aot/` 下，随时可查看实际传了哪些类。
+- **与既有模式一致**：`aot-registrars.txt` 本身就是每行一类、支持 `#` 注释的
+  锚点文件，生成器最初即文件清单模式；MetaPlugin（`beanmeta-registrars.txt`）、
+  ProxyPlugin（`proxy-registrars.txt`）同样以文件传清单，各生成器保持一致。
+- **格式可扩展**：清单文件支持注释与空行，将来如需按行附加注册选项（如自定义
+  反射策略），无需改动命令行接口。
+
+作为对照，classpath 条目是数量有限的扁平路径列表，直接作为尾随参数传递即可。
+
 ## 示例
 
 ```text
