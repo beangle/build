@@ -33,8 +33,12 @@ private[sbt] object GeneratorSupport {
      * 其余为确定性失败（1）。 */
     def of(exitCode: Int, output: String): GenFailure = {
       val summary = output.linesIterator.filter(_.nonEmpty).toSeq.lastOption.getOrElse(s"exited with code $exitCode")
+      // NoSuchTypeException/Cannot resolve type description：ByteBuddy TypePool 在 sbt 2
+      // classDirectory 未完全物化时读不到刚编译的类（如 Scala 3 enum 伴生），属同一时序竞态，
+      // 短时重试后即可解析；真正的类型缺失会在重试耗尽后以 exit 1 报出。
       val retryable = exitCode == 2 ||
-        output.contains("ClassNotFoundException") || output.contains("NoClassDefFoundError")
+        output.contains("ClassNotFoundException") || output.contains("NoClassDefFoundError") ||
+        output.contains("NoSuchTypeException") || output.contains("Cannot resolve type description")
       GenFailure(if (retryable) 2 else 1, summary)
     }
   }
