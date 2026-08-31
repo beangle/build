@@ -9,10 +9,13 @@ native-image 需要的配置文件，随 jar 打包后在 `native-image` 构建�
 
 ## 锚点文件
 
-两类声明都会参与，合并为一个注册器清单：
+三类声明都会参与，合并为一个注册器清单：
 
 - `src/main/resources/META-INF/beangle/aot-registrars.txt`
   —— 每行一个 `org.beangle.commons.aot.AotHintRegistrar` 实现类名，`#` 开头为注释；
+- `src/main/resources/META-INF/beangle/meta-registrars.txt`
+  —— 每行一个 `MetaRegistrar` 实现类名（`MetaRegistrar` 亦为 `AotHintRegistrar`
+  子类，bean 元数据注册与 AOT 提示一并汇总），`#` 开头为注释；
 - `src/main/resources/beangle.xml`
   —— `<jpa>/<orm>` 的 `<mapping class="...">` 与 `<cdi>` 的 `<module class="...">`
   声明的类（均为 `MetaRegistrar` 子类，由 MetaRegistrar 汇总 AOT 提示），以及
@@ -41,10 +44,27 @@ registrar 与 classes（如 web initializer）均无声明时，删除旧的生�
 - `serialization-config.json`
 - `native-image.properties`
 
+每个文件只在其类别存在注册项时写出；类别为空时删除残留旧文件，避免把失效配置
+打包进 jar。各依赖库（如 commons）自带的 `META-INF/native-image/beangle/` 配置
+由 native-image 构建时自动合并，插件只生成本模块声明来源的注册项。
+
+## 生成文件来源
+
+| 文件 | 注册来源 |
+|------|----------|
+| `reflect-config.json` | `AotHintRegistrar.registering()` 里的 `registerType`/`registerEnum`；registrar 类自身（普通类注册声明构造器，Scala object 另注册 `$` 伴生类的声明构造器 + 声明字段，保证运行期 `getInstance`/`tryGetInstance` 读 `MODULE$`）；`--classes` 清单的 web initializer（public 构造器 + 探测注册 `$` 伴生类） |
+| `resource-config.json` | `registerPattern` 注册的资源模式，例如 commons 内置 registrar 的 `META-INF/services/.*`、`beangle.xml`、`.*\.zh_CN`、mime 类型表，`MetaAotHints` 的 `META-INF/beangle/beanmeta.idx`，`LogbackAotHints` 的 `logback.xml` |
+| `proxy-config.json` | `registerProxy`/`registerProxyByName` 注册的 JDK 动态代理接口 |
+| `serialization-config.json` | `registerSerializable` 注册的可序列化类（`registerEnum` 会同步登记枚举值类的序列化） |
+| `native-image.properties` | `registerRuntimeInitialized` 注册的类，输出 `--initialize-at-run-time` |
+
+示例：bui 的 `BuiMetaRegistrar` 只调用 `register`/`registerType`，因此仅产出
+`reflect-config.json`；资源、代理、序列化类别为空时不生成对应文件。
+
 ## 机制
 
 - fork 子进程 `org.beangle.commons.aot.AotHintGenerator`，classpath 为外部依赖 +
-  依赖项目 classes + 本模块 classes；插件把两类清单分别写入
+  依赖项目 classes + 本模块 classes；插件把 registrar 与 classes 两类清单分别写入
   `target/aot/aot-registrars.txt` 与 `target/aot/aot-classes.txt`，以
   `--registrars`/`--classes` 传给生成器；
 - `--registrars` 清单：每个类必须是 `AotHintRegistrar` 实现。生成器加载后调用
@@ -56,6 +76,8 @@ registrar 与 classes（如 web initializer）均无声明时，删除旧的生�
   实例化）；由于用户声明的类名不带 `$`、实际可能是 Scala object，生成器同时探测并
   注册 `$` 伴生类（声明构造器 + 声明字段，`MODULE$` 单例入口）。仅声明 classes
   时同样会产出 `reflect-config.json`；两类皆声明时合并写入同一份配置；
+- 按类别写出：`registering()` 收集的 `AotHints` 分五类（反射类型/资源模式/代理/
+  序列化/运行期初始化），类别为空时对应文件不生成（见"生成文件来源"）；
 - 退出码：`0` 成功、`1` 确定性失败（如声明类不是 registrar）、`2` 声明类未找到
   （sbt 2 的 classDirectory 物化可能晚于编译完成）会短暂重试最多 10 次。
 
@@ -65,8 +87,8 @@ registrar 与 classes（如 web initializer）均无声明时，删除旧的生�
 （`target/aot/aot-registrars.txt`、`target/aot/aot-classes.txt`），再以
 `--registrars`/`--classes` 传入。原因如下：
 
-- **多来源合并**：registrars 由 `aot-registrars.txt` 与 `beangle.xml`
-  （jpa/orm mapping、cdi module）合并，classes 由 `<web><initializer>` 提取。
+- **多来源合并**：registrars 由 `aot-registrars.txt`、`meta-registrars.txt` 与
+  `beangle.xml`（jpa/orm mapping、cdi module）合并，classes 由 `<web><initializer>` 提取。
   插件负责解析、去重、合并成一份纯清单，生成器只消费清单本身，双方职责分离；
   将来新增声明来源（如其他模块的按名加载类）只需改插件侧合并逻辑，生成器不变。
 - **命令行长度**：大型应用的类清单可能数百上千行，Windows 命令行上限 8191 字符、
