@@ -26,6 +26,7 @@ sbt.version=2.0.3
 |------|----------|------|------|
 | [StylePlugin](docs/style.md) | 自动 | 源码格式检查与格式化（空白 + 许可证头） | [style.md](docs/style.md) |
 | [StatPlugin](docs/stat.md) | 自动 | 按扩展名统计代码行数 | [stat.md](docs/stat.md) |
+| [PomPlugin](docs/pom.md) | 自动 | 打包时内嵌 Maven 元信息（META-INF/maven） | [pom.md](docs/pom.md) |
 | [BootPlugin](docs/boot.md) | 自动 | 生成 beangle-boot 运行时依赖元数据 | [boot.md](docs/boot.md) |
 | [CompileHookPlugin](docs/compile-hook.md) | 自动 | 统一提供编译前/后钩子扩展点 | [compile-hook.md](docs/compile-hook.md) |
 | [MetaPlugin](docs/meta.md) | 自动 | 生成 bean 元数据索引 `beanmeta.idx` | [meta.md](docs/meta.md) |

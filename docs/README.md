@@ -9,6 +9,7 @@
 |------|------|------|
 | StylePlugin | 源码格式检查与格式化（空白 + 许可证头） | [style.md](style.md) |
 | StatPlugin | 按扩展名统计代码行数 | [stat.md](stat.md) |
+| PomPlugin | 打包时内嵌 Maven 元信息（META-INF/maven） | [pom.md](pom.md) |
 | BootPlugin | 生成 beangle-boot 运行时依赖元数据 | [boot.md](boot.md) |
 | CompileHookPlugin | 统一提供编译前/后钩子扩展点 | [compile-hook.md](compile-hook.md) |
 | MetaPlugin | 生成 bean 元数据索引 `beanmeta.idx` | [meta.md](meta.md) |

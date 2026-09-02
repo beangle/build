@@ -7,6 +7,7 @@
 提供 war 打包、SNAPSHOT 依赖内嵌、默认 `web.xml` 补齐以及版本间增量 diff：
 
 - 将 `Compile / package` 的产物类型改为 `war`；
+- `WEB-INF/classes` 中内嵌 Maven 元信息（`META-INF/maven/...`），见 [pom.md](pom.md)；
 - 组装 `src/main/webapp` 下的静态资源与 `WEB-INF` 结构；
 - 把编译产物放入 `WEB-INF/classes`，依赖 jar 放入 `WEB-INF/lib`；
 - 自动嵌入 BootPlugin 生成的依赖清单文件；
