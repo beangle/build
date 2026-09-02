@@ -21,7 +21,7 @@ developers := List(
 )
 
 val apache_commons_compress = "org.apache.commons" % "commons-compress" % "1.28.0"
-val byte_buddy = "net.bytebuddy" % "byte-buddy" % "1.18.8"
+val byte_buddy = "net.bytebuddy" % "byte-buddy" % "1.18.12"
 
 lazy val root = (project in file("."))
   .enablePlugins(SbtPlugin)
