@@ -145,8 +145,7 @@ object ProxyPlugin extends sbt.AutoPlugin {
     try {
       // 清掉上次残留产物，避免失败/跳过时把旧映射打进 jar
       deleteStale(resDir)
-      val bytebuddy = bytebuddyJar(log)
-      bytebuddy foreach (b => log.info(s"Using build plugin ByteBuddy: ${b.getAbsolutePath}"))
+      val bytebuddy = bytebuddyJar()
       val generatorCp = (bytebuddy.map(_.getAbsolutePath) ++ cpEntries).mkString(File.pathSeparator)
       val cmd = Seq("java", "-cp", generatorCp, GeneratorMain,
         "--registrars", listFile.getAbsolutePath,
@@ -192,16 +191,14 @@ object ProxyPlugin extends sbt.AutoPlugin {
    * sbt 2 的 PluginClassLoader 不向插件代码暴露依赖类（getResource/Class.forName 均不可用），
    * 因此依次尝试：插件 classloader 资源 → 插件依赖类 codeSource → coursier/ivy 缓存路径。
    */
-  private def bytebuddyJar(log: Logger): Option[File] = {
+  private def bytebuddyJar(): Option[File] = {
     val viaLoader = Option(getClass.getClassLoader.getResource(ByteBuddyClass)).flatMap(urlOf)
     val viaClass = try {
       val bb = Class.forName("net.bytebuddy.ByteBuddy")
       Option(bb.getProtectionDomain.getCodeSource).flatMap(s => Option(s.getLocation)).map(l => new File(l.toURI))
     } catch { case _: Throwable => None }
     val viaCache = coursierByteBuddy()
-    val found = viaLoader.orElse(viaClass).orElse(viaCache)
-    found.foreach(b => log.info(s"Using build plugin ByteBuddy: ${b.getAbsolutePath}"))
-    found
+    viaLoader.orElse(viaClass).orElse(viaCache)
   }
 
   private def urlOf(u: java.net.URL): Option[File] = {
