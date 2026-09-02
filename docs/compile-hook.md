@@ -37,3 +37,34 @@ Compile / compilePostHooks += Def.task {
 
 - `compile` 通过 `Def.uncached` 定义，钩子每次编译都会执行，不受 sbt 2 任务缓存影响；
 - 不要在钩子里再求值 `Compile / compile`，避免任务依赖成环。
+
+## 设计要点：生成器 classpath 与本模块资源
+
+post 钩子（各类生成器）在 `compile` 完成后立即执行，而 `classDirectory` 中本模块的
+资源（`src/main/resources` 下文件，如 `beangle.xml`）要等 `copyResources` 执行才会
+物化，后者属于 `products`/`packageBin` 链，晚于钩子。因此在钩子运行时，`classDirectory`
+只包含编译产物，不含本模块资源。
+
+生成器子进程若只用 `classDirectory` + 依赖构建 classpath，加载按类路径扫描资源的
+registrar 时会失败。实际案例：ems portal 模块 `clean` 后 `compile` 报
+`cannot find beangle.xml,contains <ems> element.`——registrar（`DefaultModule` →
+`CacheModule.binding` → `EmsApp.<clinit>`）扫描 `classpath*:beangle.xml` 找 `<ems>`，
+而生成器 classpath 上只有 app 模块无 `<ems>` 的 `beangle.xml`。此前 `classDirectory`
+残留旧资源掩盖了该问题，`clean` 后必现。
+
+约定（AotPlugin/MetaPlugin 统一实现）：生成器子进程 classpath =
+本模块 `classDirectory` + 本模块 `unmanagedResourceDirectories` + 外部依赖 +
+依赖项目 classes。本模块类与资源放最前，与运行期"资源在 jar 中"的语义一致，
+避免依赖项目同名资源遮蔽。等价于把 `src/main/resources` 提前到钩子可见，
+而不是调整钩子时机。
+
+为什么不把钩子挪到 `copyResources` 之后或注册为 `resourceGenerators`：
+
+- `resourceGenerators` 在资源拷贝**之前**执行，`classDirectory` 依旧没有本模块资源，
+  时序问题不变；
+- 覆写 `copyResources` 后置运行会让裸 `compile` 不再触发生成器，还得让 `compile`
+  依赖它，形成 `compile → copyResources → resources → resourceGenerators(同步项) → compile`
+  的循环；
+- 生成器若读 `fullClasspath`/`dependencyClasspath`（含本模块 `products`，`exportJars`
+  时为 `packageBin`），会形成 `resources → packageBin → resources` 环导致 sbt 卡死
+  （历史踩坑，见 AotPlugin 注释）。

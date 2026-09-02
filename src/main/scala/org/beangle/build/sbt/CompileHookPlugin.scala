@@ -40,6 +40,9 @@ import sbt.Keys.*
  * `compile`（钩子在其中执行完毕），`products`（makeProducts 会求值 resources）与
  * `packageBin` 的快照必然发生在钩子之后。生成器本身不注册在 `resourceGenerators`，
  * 仍由 post 钩子驱动，因此不会引入 resourceGenerators → classpath → products 环。
+ *
+ * 钩子时机与生成器 classpath 的设计要点（本模块资源为何提前可见、为何不挂到
+ * copyResources 之后）见 docs/compile-hook.md。
  */
 object CompileHookPlugin extends sbt.AutoPlugin {
 

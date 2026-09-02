@@ -67,9 +67,13 @@ object MetaPlugin extends sbt.AutoPlugin {
       val registrarsFile = (Compile / resourceDirectory).value / RegistrarsPath
       val beangleXml = (Compile / resourceDirectory).value / BeangleXmlName
       val listFile = (Compile / target).value / "meta" / "beanmeta-registrars.txt"
-      // 本模块 classes 放最前（与运行期 classpath 语义一致），避免依赖项目同名资源遮蔽，见 AotPlugin
+      // post-compile 钩子早于 copyResources，classDirectory 尚未物化本模块资源；
+      // 补上未管理资源目录（src/main/resources），使生成器子进程按运行期 classpath 语义
+      // 可见本模块 beangle.xml 等类路径扫描输入。本模块 classes/资源放最前，避免依赖项目
+      // 同名资源遮蔽（与运行期 classpath 语义一致）。
+      val resources = (Compile / unmanagedResourceDirectories).value
       val depClasses = (Compile / classDirectory).all(ScopeFilter(inDependencies(ThisProject))).value
-      val classpath = classesDir +: (CpFiles.files((Runtime / externalDependencyClasspath).value) ++ depClasses)
+      val classpath = classesDir +: (resources ++ CpFiles.files((Runtime / externalDependencyClasspath).value) ++ depClasses)
       generate(registrarsFile, beangleXml, listFile, outputPath, classpath, streams.value.log)
     },
     Compile / compilePostHooks += Def.task {
@@ -87,7 +91,8 @@ object MetaPlugin extends sbt.AutoPlugin {
       val listFile = (Test / target).value / "meta" / "beanmeta-registrars.txt"
       val mainClasses = (Compile / classDirectory).value
       val depClasses = (Compile / classDirectory).all(ScopeFilter(inDependencies(ThisProject))).value
-      val classpath = classesDir +: (mainClasses +: (CpFiles.files((Test / externalDependencyClasspath).value) ++ depClasses))
+      val resources = (Test / unmanagedResourceDirectories).value
+      val classpath = classesDir +: (mainClasses +: (resources ++ CpFiles.files((Test / externalDependencyClasspath).value) ++ depClasses))
       generate(registrarsFile, beangleXml, listFile, outputPath, classpath, streams.value.log)
     },
     Test / compilePostHooks += Def.task {
