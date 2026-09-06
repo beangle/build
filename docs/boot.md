@@ -24,7 +24,13 @@
 
 ## 依赖筛选规则
 
-- 仅取 `compile` 与 `runtime` 配置（`optional`、`test`、`provided` 不在其中）；
+> **重要：`provided`、`optional`、`test` 依赖一律不进入清单。**
+> 这些依赖虽然会出现在编译 classpath 上（如容器提供的 `javax.servlet-api`、
+> 可选的日志实现等），但本插件只读取 UpdateReport 的 `compile` / `runtime` 配置，
+> 因此它们既不会写入 `META-INF/beangle/dependencies`，`bootRepo` 也不会复制其 jar——
+> boot 启动只拉取真正的运行期依赖，容器/可选件由应用自身或运行环境提供。
+
+- 仅取 `compile` 与 `runtime` 配置；
 - 排除被 evict 的模块；
 - 排除版本号含 `SNAPSHOT` 的模块；
 - 排除自身模块；
