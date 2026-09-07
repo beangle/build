@@ -1,3 +1,20 @@
+/*
+ * Copyright (C) 2005, The Beangle Software.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 package org.beangle.build.sbt
 
 import org.beangle.build.util.{Files, Https, IOs, Strings}
@@ -8,7 +25,9 @@ import sbt.io.IO
 
 import java.io.{ByteArrayOutputStream, File, FileInputStream}
 import java.net.{HttpURLConnection, URI}
+import java.security.MessageDigest
 import java.time.LocalDateTime
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Base64
 import scala.jdk.CollectionConverters.PropertiesHasAsScala
@@ -46,13 +65,16 @@ object SnapshotPlugin extends sbt.AutoPlugin {
       if (version.value.contains("SNAPSHOT") && (a.extension == "war" || a.extension == "jar")) {
         if (file.exists()) {
           val formater = DateTimeFormatter.ofPattern("yyyyMMdd.HHmmss")
-          val buildNumber = formater.format(LocalDateTime.now) + "-1"
+          val buildNumber = formater.format(LocalDateTime.now(ZoneOffset.UTC)) + "-1"
           val build = new File(dir + a.name + "-" + version.value.replace("-SNAPSHOT", "") + "-" + buildNumber + "." + a.extension)
           if (build.exists()) {
             build.delete()
           }
           Files.copy(file, build)
           log.info(s"Build ${build.getAbsolutePath}")
+          val sha1File = new File(build.getAbsolutePath + ".sha1")
+          IO.write(sha1File, sha1Hex(build))
+          log.info(s"Generated ${sha1File.getName}")
           Some(build)
         } else {
           log.warn(s"Cannot find ${file.getName},build snapshot is aborted.")
@@ -68,7 +90,7 @@ object SnapshotPlugin extends sbt.AutoPlugin {
   private def uploadTask = {
     Def.task {
       val log = streams.value.log
-      var url = snapshotRepoUrl.value
+      val url = snapshotRepoUrl.value
       val credentials = snapshotCredentials.value
       val file = snapshotBuild.value
 
@@ -90,18 +112,40 @@ object SnapshotPlugin extends sbt.AutoPlugin {
               password = cp("password")
             }
           }
-          url = Strings.replace(url, "{fileName}", f.getName)
-          log.info(s"Uploading to ${url}")
-
-          val rs = upload(URI.create(url).toURL, f, user, password)
-          if (rs._1 == 200) {
-            log.info("Upload success")
-          } else {
-            log.error(s"Upload Failed for status is ${rs._1} and reason is ${rs._2}")
+          val sha1File = new File(f.getAbsolutePath + ".sha1")
+          if (!sha1File.exists()) {
+            log.warn(s"Missing sha1 file ${sha1File.getAbsolutePath}")
+          }
+          val files = if (sha1File.exists()) Seq(f, sha1File) else Seq(f)
+          files foreach { uploadFile =>
+            val uploadUrl = Strings.replace(url, "{fileName}", uploadFile.getName)
+            log.info(s"Uploading to ${uploadUrl}")
+            val rs = upload(URI.create(uploadUrl).toURL, uploadFile, user, password)
+            if (rs._1 == 200) {
+              log.info(s"Upload ${uploadFile.getName} success")
+            } else {
+              log.error(s"Upload ${uploadFile.getName} failed for status is ${rs._1} and reason is ${rs._2}")
+            }
           }
         }
       }
     }
+  }
+
+  private[sbt] def sha1Hex(file: File): String = {
+    val md = MessageDigest.getInstance("SHA-1")
+    val in = new FileInputStream(file)
+    try {
+      val buffer = new Array[Byte](8192)
+      var n = in.read(buffer)
+      while (n != -1) {
+        md.update(buffer, 0, n)
+        n = in.read(buffer)
+      }
+    } finally {
+      in.close()
+    }
+    md.digest().map(b => "%02x".format(b & 0xff)).mkString
   }
 
   private def upload(url: URL, file: File, user: String, password: String): (Int, Any) = {
