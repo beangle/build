@@ -36,11 +36,15 @@ import java.io.File
   * constructors plus the Scala object companion when the class is actually an object);
   * projects with none of these are skipped without error, so no explicit opt-in is needed.
   *
-  * Loads each declared registrar, collects its registrations, and writes GraalVM config
-  * files into the `META-INF/native-image/beangle/` subdirectory (reflect-config.json,
-  * resource-config.json, proxy-config.json, serialization-config.json,
-  * native-image.properties) — each framework/plugin owns its own subdirectory, so
-  * configs merge cleanly when multiple libraries are on the classpath.
+  * Loads each declared registrar, collects its registrations, and writes a single
+  * consolidated `reachability-metadata.json` file (GraalVM 25+ format) into the
+  * `META-INF/native-image/beangle/` subdirectory. This file contains all reflection,
+  * resource, proxy, and serialization metadata in the GraalVM reachability-metadata
+  * schema. Runtime-initialized classes are still written to `native-image.properties`
+  * as `--initialize-at-run-time` is a build argument, not metadata.
+  *
+  * Legacy format (multiple config files) is supported via `--format legacy` but
+  * deprecated in favor of the consolidated format.
   */
 object AotPlugin extends sbt.AutoPlugin {
 
@@ -48,7 +52,9 @@ object AotPlugin extends sbt.AutoPlugin {
   private val RegistrarsPath = "META-INF/beangle/aot-registrars.txt"
   private val MetaRegistrarsPath = "META-INF/beangle/meta-registrars.txt"
   private val BeangleXmlName = "beangle.xml"
-  private val ConfigNames = Seq("reflect-config.json", "resource-config.json", "proxy-config.json", "serialization-config.json", "native-image.properties")
+  private val ReachabilityMetadataFile = "reachability-metadata.json"
+  private val NativeImagePropertiesFile = "native-image.properties"
+  private val LegacyConfigNames = Seq("reflect-config.json", "resource-config.json", "proxy-config.json", "serialization-config.json")
 
   object autoImport {
     val aotHints = taskKey[Seq[File]]("Generate GraalVM native-image config files from AotHintRegistrar implementations (aot/meta registrars) and beangle.xml web initializers")
@@ -142,10 +148,17 @@ object AotPlugin extends sbt.AutoPlugin {
 
   /** 删除输出目录中的残留配置文件（含迁移前的扁平目录残留）。 */
   private def deleteStaleConfigs(outDir: File): Unit = {
-    ConfigNames.foreach { name =>
+    // Clean up legacy config files
+    LegacyConfigNames.foreach { name =>
       (outDir / name).delete()
       (outDir.getParentFile / name).delete()
     }
+    // Clean up new consolidated file
+    (outDir / ReachabilityMetadataFile).delete()
+    (outDir.getParentFile / ReachabilityMetadataFile).delete()
+    // Clean up native-image.properties (may exist in both formats)
+    (outDir / NativeImagePropertiesFile).delete()
+    (outDir.getParentFile / NativeImagePropertiesFile).delete()
   }
 
   /** Runs the generator once; Right(files) 成功产出，Left(GenFailure) 按退出码分类失败。 */
@@ -174,8 +187,8 @@ object AotPlugin extends sbt.AutoPlugin {
       val exitCode = proc.waitFor()
       reader.join(5000)
       if (exitCode == 0) {
-        val files = ConfigNames.map(name => outDir / name).filter(_.exists())
-        if (files.nonEmpty) log.info(s"Generated GraalVM configs in ${outDir.getAbsolutePath}")
+        val files = Seq(outDir / ReachabilityMetadataFile, outDir / NativeImagePropertiesFile).filter(_.exists())
+        if (files.nonEmpty) log.info(s"Generated GraalVM reachability-metadata in ${outDir.getAbsolutePath}")
         Right(files)
       } else {
         val output = out.toString
