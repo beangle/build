@@ -24,7 +24,8 @@
   `<文件名>.sha1` 校验文件（内容为产物的 SHA-1 十六进制摘要）；时间戳采用
   UTC 时间（`yyyyMMdd.HHmmss`）；
 - `snapshotUpload`：以 `POST`（`Content-Type: application/zip`）依次上传产物及其
-  `<文件名>.sha1` 校验文件；若凭据文件中含 `user` / `password`，则附加 Basic Auth；
+  `<文件名>.sha1` 校验文件；若凭据文件缺失或不含 `user` / `password`，则报错并
+  中止上传（不做任何上传请求）；否则附加 Basic Auth 后上传；
   `{fileName}` 会被替换为实际文件名；
 - 版本号不含 `SNAPSHOT` 或产物不是 war/jar 时，两个任务都会跳过并告警。
 

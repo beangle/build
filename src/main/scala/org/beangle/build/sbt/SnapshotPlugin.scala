@@ -98,37 +98,46 @@ object SnapshotPlugin extends sbt.AutoPlugin {
         log.error(s"set snapshotRepoUrl := http://server/path/to/upload first.")
       } else {
         file foreach { f =>
-          var user: String = null
-          var password: String = null
-          if (null != credentials) {
-            val properties = new java.util.Properties
-            IO.load(properties, credentials)
-            val cp = properties.asScala.map { case (k, v) => (k, v.trim) }.toMap
-
-            if (!cp.contains("user") || !cp.contains("password")) {
-              log.warn(s"Cannot find user or password from properties file ${credentials}")
-            } else {
-              user = cp("user")
-              password = cp("password")
-            }
-          }
-          val sha1File = new File(f.getAbsolutePath + ".sha1")
-          if (!sha1File.exists()) {
-            log.warn(s"Missing sha1 file ${sha1File.getAbsolutePath}")
-          }
-          val files = if (sha1File.exists()) Seq(f, sha1File) else Seq(f)
-          files foreach { uploadFile =>
-            val uploadUrl = Strings.replace(url, "{fileName}", uploadFile.getName)
-            log.info(s"Uploading to ${uploadUrl}")
-            val rs = upload(URI.create(uploadUrl).toURL, uploadFile, user, password)
-            if (rs._1 == 200) {
-              log.info(s"Upload ${uploadFile.getName} success")
-            } else {
-              log.error(s"Upload ${uploadFile.getName} failed for status is ${rs._1} and reason is ${rs._2}")
-            }
+          readCredentials(credentials) match {
+            case Some((user, password)) =>
+              val sha1File = new File(f.getAbsolutePath + ".sha1")
+              if (!sha1File.exists()) {
+                log.warn(s"Missing sha1 file ${sha1File.getAbsolutePath}")
+              }
+              val files = if (sha1File.exists()) Seq(f, sha1File) else Seq(f)
+              files foreach { uploadFile =>
+                val uploadUrl = Strings.replace(url, "{fileName}", uploadFile.getName)
+                log.info(s"Uploading to ${uploadUrl}")
+                val rs = upload(URI.create(uploadUrl).toURL, uploadFile, user, password)
+                if (rs._1 == 200) {
+                  log.info(s"Upload ${uploadFile.getName} success")
+                } else {
+                  log.error(s"Upload ${uploadFile.getName} failed for status is ${rs._1} and reason is ${rs._2}")
+                }
+              }
+            case None =>
+              val hint =
+                if (null == credentials) "snapshotCredentials is not set"
+                else if (!credentials.exists()) s"credentials file ${credentials} does not exist"
+                else s"cannot find user or password in credentials file ${credentials}"
+              log.error(s"Snapshot upload is aborted: $hint")
           }
         }
       }
+    }
+  }
+
+  private def readCredentials(file: File): Option[(String, String)] = {
+    if (null == file || !file.exists()) None
+    else {
+      val properties = new java.util.Properties
+      IO.load(properties, file)
+      val cp = properties.asScala.map { case (k, v) => (k, v.trim) }.toMap
+      for {
+        user <- cp.get("user")
+        password <- cp.get("password")
+        if user.nonEmpty && password.nonEmpty
+      } yield (user, password)
     }
   }
 
