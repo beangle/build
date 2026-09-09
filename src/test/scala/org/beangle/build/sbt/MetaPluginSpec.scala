@@ -21,50 +21,47 @@ import org.scalatest.funspec.AnyFunSpec
 import org.scalatest.matchers.should.Matchers
 import sbt.*
 
-import java.io.File
-import java.nio.charset.StandardCharsets
-import java.nio.file.Files
-
 class MetaPluginSpec extends AnyFunSpec with Matchers {
 
-  private def write(file: File, content: String): File = {
-    file.getParentFile.mkdirs()
-    Files.write(file.toPath, content.getBytes(StandardCharsets.UTF_8))
-    file
-  }
-
   describe("collectRegistrars") {
-    it("merges meta-registrars.txt with beangle.xml classes, dedup preserving order") {
-      val dir = Files.createTempDirectory("meta").toFile
-      val registrars = write(dir / "meta-registrars.txt",
+    it("merges meta-registrars.txt texts with beangle.xml classes of multiple entries, dedup preserving order") {
+      val registrars =
         """# comment
           |org.beangle.ems.app.CdiModule
           |
           |org.beangle.ems.app.ExtraRegistrar
-          |""".stripMargin)
-      val beangleXml = write(dir / "beangle.xml",
+          |""".stripMargin
+      val xml1 =
         """<beangle>
           |  <cdi>
           |    <module class="org.beangle.ems.app.CdiModule"/>
           |    <module class="org.beangle.ems.app.MappingModule"/>
           |  </cdi>
-          |</beangle>""".stripMargin)
-      MetaPlugin.collectRegistrars(registrars, beangleXml) shouldBe Seq(
+          |</beangle>""".stripMargin
+      val xml2 =
+        """<beangle>
+          |  <jpa>
+          |    <orm>
+          |      <mapping class="org.beangle.ems.app.MappingModule"/>
+          |    </orm>
+          |  </jpa>
+          |  <cdi>
+          |    <module class="org.beangle.ems.app.OtherRegistrar"/>
+          |  </cdi>
+          |</beangle>""".stripMargin
+      MetaPlugin.collectRegistrars(Seq(registrars), Seq(xml1, xml2)) shouldBe Seq(
         "org.beangle.ems.app.CdiModule",
         "org.beangle.ems.app.ExtraRegistrar",
-        "org.beangle.ems.app.MappingModule")
+        "org.beangle.ems.app.MappingModule",
+        "org.beangle.ems.app.OtherRegistrar")
     }
 
     it("returns empty when neither anchor declares classes") {
-      val dir = Files.createTempDirectory("meta").toFile
-      val registrars = write(dir / "meta-registrars.txt", "# only comments\n")
-      val beangleXml = write(dir / "beangle.xml", "<beangle/>")
-      MetaPlugin.collectRegistrars(registrars, beangleXml) shouldBe empty
+      MetaPlugin.collectRegistrars(Seq("# only comments\n"), Seq("<beangle/>")) shouldBe empty
     }
 
-    it("returns empty when both anchors are missing") {
-      val dir = Files.createTempDirectory("meta").toFile
-      MetaPlugin.collectRegistrars(dir / "meta-registrars.txt", dir / "beangle.xml") shouldBe empty
+    it("returns empty when no anchors are found on classpath") {
+      MetaPlugin.collectRegistrars(Seq.empty, Seq.empty) shouldBe empty
     }
   }
 }

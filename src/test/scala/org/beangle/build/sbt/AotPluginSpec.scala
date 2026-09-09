@@ -21,83 +21,79 @@ import org.scalatest.funspec.AnyFunSpec
 import org.scalatest.matchers.should.Matchers
 import sbt.*
 
-import java.io.File
-import java.nio.charset.StandardCharsets
-import java.nio.file.Files
-
 class AotPluginSpec extends AnyFunSpec with Matchers {
 
-  private def write(file: File, content: String): File = {
-    file.getParentFile.mkdirs()
-    Files.write(file.toPath, content.getBytes(StandardCharsets.UTF_8))
-    file
-  }
+  private val mappingXml =
+    """<beangle>
+      |  <jpa>
+      |    <orm>
+      |      <mapping class="org.beangle.ems.app.MappingModule"/>
+      |    </orm>
+      |  </jpa>
+      |  <cdi>
+      |    <module class="org.beangle.ems.app.CdiModule"/>
+      |  </cdi>
+      |</beangle>""".stripMargin
 
   describe("collectRegistrars") {
-    it("merges aot-registrars.txt, meta-registrars.txt and beangle.xml classes, dedup preserving order") {
-      val dir = Files.createTempDirectory("aot").toFile
-      val aot = write(dir / "aot-registrars.txt", "org.beangle.ems.app.BeangleRegistrar\n")
-      val meta = write(dir / "meta-registrars.txt",
+    it("merges registrar texts and beangle.xml classes from multiple classpath entries, dedup preserving order") {
+      val aot = "org.beangle.ems.app.BeangleRegistrar\n"
+      val meta =
         """# comment
           |org.beangle.ems.app.CdiModule
           |
           |org.beangle.ems.app.ExtraRegistrar
-          |""".stripMargin)
-      val beangleXml = write(dir / "beangle.xml",
+          |""".stripMargin
+      // 第二个 classpath 条目（如另一个依赖 jar 的 beangle.xml）
+      val xml2 =
         """<beangle>
-          |  <jpa>
-          |    <orm>
-          |      <mapping class="org.beangle.ems.app.MappingModule"/>
-          |    </orm>
-          |  </jpa>
           |  <cdi>
           |    <module class="org.beangle.ems.app.CdiModule"/>
+          |    <module class="org.beangle.ems.app.OtherRegistrar"/>
           |  </cdi>
-          |</beangle>""".stripMargin)
-      AotPlugin.collectRegistrars(aot, meta, beangleXml) shouldBe Seq(
+          |</beangle>""".stripMargin
+      AotPlugin.collectRegistrars(Seq(aot, meta), Seq(mappingXml, xml2)) shouldBe Seq(
         "org.beangle.ems.app.BeangleRegistrar",
         "org.beangle.ems.app.CdiModule",
         "org.beangle.ems.app.ExtraRegistrar",
-        "org.beangle.ems.app.MappingModule")
+        "org.beangle.ems.app.MappingModule",
+        "org.beangle.ems.app.OtherRegistrar")
     }
 
     it("returns empty when no anchor declares classes") {
-      val dir = Files.createTempDirectory("aot").toFile
-      val aot = write(dir / "aot-registrars.txt", "# only comments\n")
-      val meta = write(dir / "meta-registrars.txt", "# only comments\n")
-      val beangleXml = write(dir / "beangle.xml", "<beangle/>")
-      AotPlugin.collectRegistrars(aot, meta, beangleXml) shouldBe empty
+      AotPlugin.collectRegistrars(Seq("# only comments\n"), Seq("<beangle/>")) shouldBe empty
     }
 
-    it("returns empty when all anchors are missing") {
-      val dir = Files.createTempDirectory("aot").toFile
-      AotPlugin.collectRegistrars(dir / "aot-registrars.txt", dir / "meta-registrars.txt", dir / "beangle.xml") shouldBe empty
+    it("returns empty when no anchors are found on classpath") {
+      AotPlugin.collectRegistrars(Seq.empty, Seq.empty) shouldBe empty
     }
   }
 
   describe("collectClasses") {
-    it("extracts web initializer classes from beangle.xml") {
-      val dir = Files.createTempDirectory("aot").toFile
-      val beangleXml = write(dir / "beangle.xml",
+    it("extracts web initializer classes from beangle.xml texts of multiple entries") {
+      val xml1 =
         """<beangle>
-          |  <jpa>
-          |    <orm>
-          |      <mapping class="org.beangle.ems.app.MappingModule"/>
-          |    </orm>
-          |  </jpa>
           |  <web>
           |    <initializer class="org.beangle.she.config.ConfigInitializer"/>
           |    <initializer class="org.beangle.she.spring.ContainerInitializer"/>
           |  </web>
-          |</beangle>""".stripMargin)
-      AotPlugin.collectClasses(beangleXml) shouldBe Seq(
+          |</beangle>""".stripMargin
+      val xml2 =
+        """<beangle>
+          |  <web>
+          |    <initializer class="org.beangle.she.config.ConfigInitializer"/>
+          |    <initializer class="org.beangle.she.webmvc.WebmvcInitializer"/>
+          |  </web>
+          |</beangle>""".stripMargin
+      AotPlugin.collectClasses(Seq(xml1, xml2)) shouldBe Seq(
         "org.beangle.she.config.ConfigInitializer",
-        "org.beangle.she.spring.ContainerInitializer")
+        "org.beangle.she.spring.ContainerInitializer",
+        "org.beangle.she.webmvc.WebmvcInitializer")
     }
 
-    it("returns empty when beangle.xml is missing") {
-      val dir = Files.createTempDirectory("aot").toFile
-      AotPlugin.collectClasses(dir / "beangle.xml") shouldBe empty
+    it("returns empty when no beangle.xml is found") {
+      AotPlugin.collectClasses(Seq.empty) shouldBe empty
     }
   }
+
 }

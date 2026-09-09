@@ -52,11 +52,13 @@ registrar 时会失败。实际案例：ems portal 模块 `clean` 后 `compile` 
 而生成器 classpath 上只有 app 模块无 `<ems>` 的 `beangle.xml`。此前 `classDirectory`
 残留旧资源掩盖了该问题，`clean` 后必现。
 
-约定（AotPlugin/MetaPlugin 统一实现）：生成器子进程 classpath =
-本模块 `classDirectory` + 本模块 `unmanagedResourceDirectories` + 外部依赖 +
-依赖项目 classes。本模块类与资源放最前，与运行期"资源在 jar 中"的语义一致，
-避免依赖项目同名资源遮蔽。等价于把 `src/main/resources` 提前到钩子可见，
-而不是调整钩子时机。
+约定（AotPlugin/MetaPlugin/ProxyPlugin 统一实现，在终端项目启用）：生成器子进程
+classpath 与锚点/资源扫描范围 = 本模块 `classDirectory` + 本模块
+`unmanagedResourceDirectories` + 外部依赖 + 依赖项目 classes + 依赖项目资源目录
+（汇总顺序见 `CpFiles.generatorEntries`）。终端集中式生成因此能遍历整个运行时
+classpath，把各库声明的 registrars / `beangle.xml` 与实体类聚合后再交给生成器。
+本模块类与资源放最前，与运行期"资源在 jar 中"的语义一致，避免依赖项目同名资源
+遮蔽。等价于把 `src/main/resources` 提前到钩子可见，而不是调整钩子时机。
 
 为什么不把钩子挪到 `copyResources` 之后或注册为 `resourceGenerators`：
 

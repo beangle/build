@@ -27,21 +27,27 @@ import java.io.File
 /** Generates Hibernate lazy-loading proxy classes from the MappingModule subclasses
  *  declared in `beangle.xml` (`<jpa>/<orm><mapping>` elements).
  *
- *  Auto-enabled on every JVM project. Generation is driven by two anchors:
- *  - `src/main/resources/beangle.xml` (or test-scope equivalent) with at least one mapping;
- *  - beangle-data-hibernate on the classpath (external jar, dependency project classes or
- *    the module itself).
- *  Projects without either are skipped without error, so no explicit opt-in is needed.
+ * 手动启用（`trigger = noTrigger`），通常在终端项目（最终应用）显式
+ * `enablePlugins(ProxyPlugin)`。库项目只负责在自身资源中声明锚点，不再各自生成代理。
  *
- *  Forks `org.beangle.data.hibernate.proxy.BeangleProxyGenerator` with the project classpath
- *  (plus the build plugin's own `net.bytebuddy:byte-buddy` jar, since applications may
- *  exclude ByteBuddy at runtime). Runs as a post-compile hook ([[CompileHookPlugin]]),
- *  so the classes are compiled before generation; exit-code-2 (declared class not
- *  found) is covered by a short retry for sbt 2's deferred classDirectory materialization.
- *  The generator writes into `Compile / resourceManaged` (packaged with the jar as
- *  resources, so the `.class` files are loadable at runtime):
+ * 生成是"集中式"的：以整个运行时 classpath（本模块 classes/资源目录 + 依赖项目
+ * classes/资源目录 + 外部依赖 jar）为输入，遍历每个条目读取 `beangle.xml`，合并所有
+ * `<jpa>/<orm><mapping>` 声明的实体，为它们统一生成懒加载代理。触发条件：
+ *  - classpath 上至少一个条目携带 `beangle.xml` 且含 mapping；
+ *  - classpath 上存在 beangle-data-hibernate（外部 jar、依赖项目或本模块均可）。
+ * 均不满足时删除旧的代理产物并跳过，不报错。
+ *
+ * Forks `org.beangle.data.hibernate.proxy.BeangleProxyGenerator` with the project classpath
+ * (plus the build plugin's own `net.bytebuddy:byte-buddy` jar, since applications may
+ * exclude ByteBuddy at runtime). Runs as a post-compile hook ([[CompileHookPlugin]]),
+ * so the classes are compiled before generation; exit-code-2 (declared class not
+ * found) is covered by a short retry for sbt 2's deferred classDirectory materialization.
+ * The generator writes into `Compile / resourceManaged` (packaged with the terminal artifact
+ * as resources, so the `.class` files are loadable at runtime):
  *  - the generated proxy `.class` files;
- *  - a GraalVM `META-INF/native-image/.../reflect-config.json` fragment.
+ *  - a GraalVM 25+ `META-INF/native-image/beangle/data/reachability-metadata.json` fragment
+ *    (reflection entries for the generated proxies, merged by native-image with the other
+ *    fragments on the classpath — e.g. the consolidated file produced by [[AotPlugin]]).
  *
  *  Runtime consumption is done by the fork's `PrebuiltProxyProvider`, which loads the
  *  pre-generated classes by name (JVM and native share the same path).
@@ -49,41 +55,46 @@ import java.io.File
 object ProxyPlugin extends sbt.AutoPlugin {
 
   private val BeangleXmlName = "beangle.xml"
-  private val NativeConfigFile = "META-INF/native-image/beangle/data/reflect-config.json"
+  private val ReachabilityMetadataFile = "META-INF/native-image/beangle/data/reachability-metadata.json"
+  /** 旧格式/旧布局配置，清理时一并删除，避免 native-image 同时读取两种格式。 */
+  private val LegacyConfigFiles = Seq(
+    "META-INF/native-image/beangle/data/reflect-config.json", // 新布局的旧格式
+    "META-INF/native-image/org/beangle/data/beangle-data-proxy/reflect-config.json") // 迁移前旧布局
   private val GeneratorMain = "org.beangle.data.hibernate.proxy.BeangleProxyGenerator"
   private val HibernateJarMarker = "beangle-data-hibernate"
   private val ByteBuddyClass = "net/bytebuddy/ByteBuddy.class"
   private val ByteBuddyVersion = "1.18.12"
 
   object autoImport {
-    val proxyClasses = taskKey[Seq[File]]("Generate Hibernate lazy-loading proxy classes from beangle.xml jpa/orm mappings")
+    val proxyClasses = taskKey[Seq[File]]("Generate consolidated Hibernate lazy-loading proxy classes from beangle.xml jpa/orm mappings across the runtime classpath")
   }
 
   import autoImport.*
 
-  override def trigger = allRequirements
+  override def trigger = noTrigger
 
   override val projectSettings: Seq[Setting[?]] = Seq(
     Compile / proxyClasses := Def.uncached {
       given FileConverter = fileConverter.value
       val log = streams.value.log
-      val beangleXml = (Compile / resourceDirectory).value / BeangleXmlName
-      if (!beangleXml.isFile) {
-        log.debug(s"No $BeangleXmlName found; Hibernate proxy generation skipped")
-        deleteStale((Compile / resourceManaged).value)
+      val classesDir = (Compile / classDirectory).value
+      val resDir = (Compile / resourceManaged).value
+      val listFile = (Compile / target).value / "proxy" / "proxy-registrars.txt"
+      val ownResources = (Compile / unmanagedResourceDirectories).value
+      val depClasses = (Compile / classDirectory).all(ScopeFilter(inDependencies(ThisProject))).value
+      val depResources = (Compile / unmanagedResourceDirectories).all(ScopeFilter(inDependencies(ThisProject))).value
+      val external = CpFiles.files((Runtime / externalDependencyClasspath).value)
+      val classpath = CpFiles.generatorEntries(classesDir, ownResources, external, depClasses, depResources)
+      val xmlTexts = ClasspathScan.readResources(classpath, BeangleXmlName)
+      if (xmlTexts.isEmpty) {
+        log.debug(s"No $BeangleXmlName on classpath; Hibernate proxy generation skipped")
+        deleteStale(resDir)
         Nil
-      } else {
-        val classesDir = (Compile / classDirectory).value
-        val resDir = (Compile / resourceManaged).value
-        val listFile = (Compile / target).value / "proxy" / "proxy-registrars.txt"
-        val depClasses = (Compile / classDirectory).all(ScopeFilter(inDependencies(ThisProject))).value
-        val classpath = classesDir +: (CpFiles.files((Runtime / externalDependencyClasspath).value) ++ depClasses)
-        if (!hasHibernate(classpath)) {
-          log.debug(s"No beangle-data-hibernate on classpath; Hibernate proxy generation skipped")
-          deleteStale(resDir)
-          Nil
-        } else generate(beangleXml, listFile, resDir, classpath, log)
-      }
+      } else if (!hasHibernate(classpath)) {
+        log.debug(s"No beangle-data-hibernate on classpath; Hibernate proxy generation skipped")
+        deleteStale(resDir)
+        Nil
+      } else generate(xmlTexts, listFile, resDir, classpath, log)
     },
     Compile / compilePostHooks += Def.task {
       (Compile / proxyClasses).value
@@ -93,24 +104,26 @@ object ProxyPlugin extends sbt.AutoPlugin {
       // 编译时序由 Test / compilePostHooks 保证（compile 完成后执行），这里不能再依赖 compile，否则成环
       given FileConverter = fileConverter.value
       val log = streams.value.log
-      val beangleXml = (Test / resourceDirectory).value / BeangleXmlName
-      if (!beangleXml.isFile) {
-        log.debug(s"No $BeangleXmlName (test) found; Hibernate proxy generation skipped")
-        deleteStale((Test / resourceManaged).value)
+      val classesDir = (Test / classDirectory).value
+      val resDir = (Test / resourceManaged).value
+      val listFile = (Test / target).value / "proxy" / "proxy-registrars.txt"
+      val ownResources = (Test / unmanagedResourceDirectories).value
+      val mainClasses = (Compile / classDirectory).value
+      val mainResources = (Compile / unmanagedResourceDirectories).value
+      val depClasses = (Compile / classDirectory).all(ScopeFilter(inDependencies(ThisProject))).value
+      val depResources = (Compile / unmanagedResourceDirectories).all(ScopeFilter(inDependencies(ThisProject))).value
+      val external = mainClasses +: (mainResources ++ CpFiles.files((Test / externalDependencyClasspath).value))
+      val classpath = CpFiles.generatorEntries(classesDir, ownResources, external, depClasses, depResources)
+      val xmlTexts = ClasspathScan.readResources(classpath, BeangleXmlName)
+      if (xmlTexts.isEmpty) {
+        log.debug(s"No $BeangleXmlName on test classpath; Hibernate proxy generation skipped")
+        deleteStale(resDir)
         Nil
-      } else {
-        val classesDir = (Test / classDirectory).value
-        val resDir = (Test / resourceManaged).value
-        val listFile = (Test / target).value / "proxy" / "proxy-registrars.txt"
-        val mainClasses = (Compile / classDirectory).value
-        val depClasses = (Compile / classDirectory).all(ScopeFilter(inDependencies(ThisProject))).value
-        val classpath = classesDir +: (mainClasses +: (CpFiles.files((Test / externalDependencyClasspath).value) ++ depClasses))
-        if (!hasHibernate(classpath)) {
-          log.debug(s"No beangle-data-hibernate on test classpath; Hibernate proxy generation skipped")
-          deleteStale(resDir)
-          Nil
-        } else generate(beangleXml, listFile, resDir, classpath, log)
-      }
+      } else if (!hasHibernate(classpath)) {
+        log.debug(s"No beangle-data-hibernate on test classpath; Hibernate proxy generation skipped")
+        deleteStale(resDir)
+        Nil
+      } else generate(xmlTexts, listFile, resDir, classpath, log)
     },
     Test / compilePostHooks += Def.task {
       (Test / proxyClasses).value
@@ -118,15 +131,16 @@ object ProxyPlugin extends sbt.AutoPlugin {
     }.taskValue
   )
 
-  /** 以 beangle.xml 的 jpa/orm mapping 类为契约生成代理：插件负责解析 beangle.xml
-   * 决定读取哪些类（仅 mapping 元素），写入清单文件后交给 BeangleProxyGenerator。
-   * 生成器对"声明类未找到"退出码 2 静默报告，这里退避重试；确定性违约（退出码 1）立即报错。
+  /** 以各 classpath 条目 beangle.xml 的 jpa/orm mapping 类为契约生成代理：插件负责
+   * 解析 beangle.xml 决定读取哪些类（仅 mapping 元素），写入清单文件后交给
+   * BeangleProxyGenerator。生成器对"声明类未找到"退出码 2 静默报告，这里退避重试；
+   * 确定性违约（退出码 1）立即报错。
    */
-  private def generate(beangleXml: File, listFile: File, resDir: File,
+  private def generate(xmlTexts: Seq[String], listFile: File, resDir: File,
       classpath: Seq[File], log: Logger): Seq[File] = {
-    val classNames = GeneratorSupport.extractMappingClasses(beangleXml)
+    val classNames = GeneratorSupport.extractMappingClasses(xmlTexts)
     if (classNames.isEmpty) {
-      log.debug(s"No mapping declared in $beangleXml; Hibernate proxy generation skipped")
+      log.debug(s"No mapping declared in beangle.xml on classpath; Hibernate proxy generation skipped")
       deleteStale(resDir)
       return Nil
     }
@@ -167,7 +181,7 @@ object ProxyPlugin extends sbt.AutoPlugin {
       val exitCode = proc.waitFor()
       reader.join(5000)
       if (exitCode == 0) {
-        val files = Seq(resDir / NativeConfigFile).filter(_.exists())
+        val files = Seq(resDir / ReachabilityMetadataFile).filter(_.exists())
         if (files.nonEmpty) log.info(s"Generated Hibernate proxies in ${resDir.getAbsolutePath}")
         Right(files)
       } else {
@@ -242,8 +256,8 @@ object ProxyPlugin extends sbt.AutoPlugin {
 
   /** 删除输出目录中的残留配置与上次生成的代理类（实体集合缩小时不残留旧代理）。 */
   private def deleteStale(resDir: File): Unit = {
-    (resDir / NativeConfigFile).delete()
-    (resDir / "META-INF/native-image/org/beangle/data/beangle-data-proxy/reflect-config.json").delete() // 迁移前旧布局
+    (resDir / ReachabilityMetadataFile).delete()
+    LegacyConfigFiles.foreach(name => (resDir / name).delete())
     deleteProxyClasses(resDir)
   }
 

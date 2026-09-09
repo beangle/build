@@ -19,7 +19,12 @@ package org.beangle.build.sbt
 
 import sbt.Logger
 
-import java.io.File
+import java.io.{File, StringReader}
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import javax.xml.parsers.DocumentBuilderFactory
+import org.w3c.dom.Element
+import org.xml.sax.InputSource
 
 /** 生成器子进程辅助：失败分类、退出码驱动的重试与 beangle.xml 声明类提取。 */
 private[sbt] object GeneratorSupport {
@@ -67,57 +72,78 @@ private[sbt] object GeneratorSupport {
     sys.error(s"$task failed")
   }
 
-  /** 从 beangle.xml 提取声明类：jpa/orm 的 mapping 与 cdi 的 module（带 class 属性）。 */
-  def extractModuleClasses(beangleXml: File): Seq[String] = {
-    extractClasses(beangleXml, Seq("mapping", "module"))
-  }
+  /** 解析声明清单文本：每行一个类名，# 开头为注释，忽略空行。 */
+  def parseLines(text: String): Seq[String] =
+    text.linesIterator.map(_.trim).filter(l => l.nonEmpty && !l.startsWith("#")).toSeq
 
-  /** 从 beangle.xml 提取 jpa/orm 的 mapping 类（仅 mapping 元素，不含 cdi module；
-   * 供 ProxyPlugin 生成懒加载代理使用）。 */
-  def extractMappingClasses(beangleXml: File): Seq[String] = {
-    extractClasses(beangleXml, Seq("mapping"))
-  }
+  /** 读取文本文件（UTF-8）。 */
+  def readText(file: File): String =
+    new String(Files.readAllBytes(file.toPath), StandardCharsets.UTF_8)
 
-  /** 从 beangle.xml 提取 web 模块的 initializer 类（`<web><initializer class="..."/>`，
-   * 仅 web 元素下的 initializer，供 AotPlugin 以 public 构造器注册反射配置）。 */
-  def extractWebInitializerClasses(beangleXml: File): Seq[String] = {
-    val doc = parseXml(beangleXml)
+  /** 从单份 beangle.xml 提取声明类：jpa/orm 的 mapping 与 cdi 的 module（带 class 属性）。 */
+  def extractModuleClasses(beangleXml: File): Seq[String] =
+    extractModuleClasses(Seq(readText(beangleXml)))
+
+  /** 从多份 beangle.xml 内容（终端聚合时跨 classpath 条目）提取 mapping/module 类，去重保序。 */
+  def extractModuleClasses(beangleXmlTexts: Seq[String]): Seq[String] =
+    extractClasses(beangleXmlTexts, Seq("mapping", "module"))
+
+  /** 从单份 beangle.xml 提取 jpa/orm 的 mapping 类（仅 mapping 元素，不含 cdi module；
+   *  供 ProxyPlugin 生成懒加载代理使用）。 */
+  def extractMappingClasses(beangleXml: File): Seq[String] =
+    extractMappingClasses(Seq(readText(beangleXml)))
+
+  /** 从多份 beangle.xml 内容提取 jpa/orm 的 mapping 类，去重保序。 */
+  def extractMappingClasses(beangleXmlTexts: Seq[String]): Seq[String] =
+    extractClasses(beangleXmlTexts, Seq("mapping"))
+
+  /** 从单份 beangle.xml 提取 web 模块的 initializer 类（`<web><initializer class="..."/>`，
+   *  仅 web 元素下的 initializer，供 AotPlugin 以 public 构造器注册反射配置）。 */
+  def extractWebInitializerClasses(beangleXml: File): Seq[String] =
+    extractWebInitializerClasses(Seq(readText(beangleXml)))
+
+  /** 从多份 beangle.xml 内容提取 web initializer 类，去重保序。 */
+  def extractWebInitializerClasses(beangleXmlTexts: Seq[String]): Seq[String] = {
     val classNames = scala.collection.mutable.LinkedHashSet.empty[String]
-    val webs = doc.getElementsByTagName("web")
-    var i = 0
-    while (i < webs.getLength) {
-      val web = webs.item(i).asInstanceOf[org.w3c.dom.Element]
-      val initializers = web.getElementsByTagName("initializer")
-      var j = 0
-      while (j < initializers.getLength) {
-        val clazz = initializers.item(j).asInstanceOf[org.w3c.dom.Element].getAttribute("class").trim
-        if (clazz.nonEmpty) classNames += clazz
-        j += 1
-      }
-      i += 1
-    }
-    classNames.toSeq
-  }
-
-  private def extractClasses(beangleXml: File, tags: Seq[String]): Seq[String] = {
-    val doc = parseXml(beangleXml)
-    val classNames = scala.collection.mutable.LinkedHashSet.empty[String]
-    def collect(tag: String): Unit = {
-      val nodes = doc.getElementsByTagName(tag)
+    beangleXmlTexts.foreach { text =>
+      val doc = parseXml(text)
+      val webs = doc.getElementsByTagName("web")
       var i = 0
-      while (i < nodes.getLength) {
-        val clazz = nodes.item(i).asInstanceOf[org.w3c.dom.Element].getAttribute("class").trim
-        if (clazz.nonEmpty) classNames += clazz
+      while (i < webs.getLength) {
+        val web = webs.item(i).asInstanceOf[Element]
+        val initializers = web.getElementsByTagName("initializer")
+        var j = 0
+        while (j < initializers.getLength) {
+          val clazz = initializers.item(j).asInstanceOf[Element].getAttribute("class").trim
+          if (clazz.nonEmpty) classNames += clazz
+          j += 1
+        }
         i += 1
       }
     }
-    tags foreach collect
     classNames.toSeq
   }
 
-  private def parseXml(beangleXml: File): org.w3c.dom.Document = {
-    val factory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+  private def extractClasses(beangleXmlTexts: Seq[String], tags: Seq[String]): Seq[String] = {
+    val classNames = scala.collection.mutable.LinkedHashSet.empty[String]
+    beangleXmlTexts.foreach { text =>
+      val doc = parseXml(text)
+      tags foreach { tag =>
+        val nodes = doc.getElementsByTagName(tag)
+        var i = 0
+        while (i < nodes.getLength) {
+          val clazz = nodes.item(i).asInstanceOf[Element].getAttribute("class").trim
+          if (clazz.nonEmpty) classNames += clazz
+          i += 1
+        }
+      }
+    }
+    classNames.toSeq
+  }
+
+  private def parseXml(xmlText: String): org.w3c.dom.Document = {
+    val factory = DocumentBuilderFactory.newInstance()
     val builder = factory.newDocumentBuilder()
-    builder.parse(beangleXml)
+    builder.parse(new InputSource(new StringReader(xmlText)))
   }
 }

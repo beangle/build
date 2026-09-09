@@ -23,28 +23,29 @@ import sbt.Keys.*
 import xsbti.FileConverter
 
 import java.io.File
+import java.nio.charset.StandardCharsets
 
 /** Generates GraalVM native-image configuration files from AotHintRegistrar implementations.
   *
-  * Auto-enabled on every JVM project. Generation is driven by the anchor files
-  * `src/main/resources/META-INF/beangle/aot-registrars.txt` and
-  * `src/main/resources/META-INF/beangle/meta-registrars.txt` (one
-  * [[org.beangle.commons.aot.AotHintRegistrar]] class name per line) plus the modules
-  * declared in `src/main/resources/beangle.xml` (`<jpa>/<orm>` mappings and `<cdi>`
-  * modules, all AotHintRegistrar subclasses via MetaRegistrar, plus `<web><initializer>`
-  * classes which are registered into reflect-config.json by AotHintGenerator — public
-  * constructors plus the Scala object companion when the class is actually an object);
-  * projects with none of these are skipped without error, so no explicit opt-in is needed.
+  * 手动启用（`trigger = noTrigger`），通常在终端项目（最终 war/native-image 应用）显式
+  * `enablePlugins(AotPlugin)`。库项目只负责在自身资源中声明锚点，不再各自生成配置。
   *
-  * Loads each declared registrar, collects its registrations, and writes a single
-  * consolidated `reachability-metadata.json` file (GraalVM 25+ format) into the
-  * `META-INF/native-image/beangle/` subdirectory. This file contains all reflection,
-  * resource, proxy, and serialization metadata in the GraalVM reachability-metadata
-  * schema. Runtime-initialized classes are still written to `native-image.properties`
-  * as `--initialize-at-run-time` is a build argument, not metadata.
+  * 生成是"集中式"的：以整个运行时 classpath（本模块 classes/资源目录 + 依赖项目
+  * classes/资源目录 + 外部依赖 jar）为输入，遍历每个条目读取：
+  *  - `META-INF/beangle/aot-registrars.txt` 与 `META-INF/beangle/meta-registrars.txt`
+  *    （每行一个 [[org.beangle.commons.aot.AotHintRegistrar]] 实现类名，`#` 注释）；
+ *  - 各条目根部的 `beangle.xml`：`<jpa>/<orm>` mapping 与 `<cdi>` module（均为
+ *    registrar 类），以及 `<web><initializer class="..."/>`（按名加载类，经
+ *    `--classes` 清单由 AotHintGenerator 以 public 构造器 + Scala object 伴生类注册）；
+ *  - 资源 glob：由各库 registrar 经 `registerPattern` 按 glob 语义显式声明（不带
+ *    `module` 时在整个 classpath 上匹配），插件不再扫描资源后缀。
   *
-  * Legacy format (multiple config files) is supported via `--format legacy` but
-  * deprecated in favor of the consolidated format.
+  * 全部条目均无声明时删除旧的生成产物并跳过，不报错。
+  *
+  * 加载每个声明的 registrar，收集注册项后写一份合并的 `reachability-metadata.json`
+  * （GraalVM 25+ 格式）到本模块 `META-INF/native-image/beangle/`（随终端产物打包）；
+  * 运行期初始化类仍写入 `native-image.properties`（`--initialize-at-run-time` 是构建
+  * 参数而非元数据）。
   */
 object AotPlugin extends sbt.AutoPlugin {
 
@@ -57,33 +58,35 @@ object AotPlugin extends sbt.AutoPlugin {
   private val LegacyConfigNames = Seq("reflect-config.json", "resource-config.json", "proxy-config.json", "serialization-config.json")
 
   object autoImport {
-    val aotHints = taskKey[Seq[File]]("Generate GraalVM native-image config files from AotHintRegistrar implementations (aot/meta registrars) and beangle.xml web initializers")
+    val aotHints = taskKey[Seq[File]]("Generate consolidated GraalVM native-image config from AotHintRegistrar implementations (aot/meta registrars) and beangle.xml web initializers across the runtime classpath")
   }
 
   import autoImport.*
 
-  override def trigger = allRequirements
+  override def trigger = noTrigger
 
   override val projectSettings: Seq[Setting[?]] = Seq(
-    aotHints := Def.uncached {
+    Compile / aotHints := Def.uncached {
       given FileConverter = fileConverter.value
       val classesDir = (Compile / classDirectory).value
       val outDir = (Compile / resourceManaged).value / OutputDir
       // post-compile 钩子早于 copyResources，classDirectory 尚未物化本模块资源；
-      // 补上未管理资源目录（src/main/resources），使生成器子进程按运行期 classpath 语义
-      // 可见本模块 beangle.xml 等类路径扫描输入。本模块 classes/资源放最前，与运行期
-      // classpath 语义一致，避免依赖项目同名资源遮蔽。
+      // 因此 classpath 显式含各条目资源目录（本模块与依赖项目），与运行期 classpath
+      // 语义一致。本模块 classes/资源放最前，避免依赖项目同名资源遮蔽。
       // 不能读 fullClasspath/dependencyClasspath：sbt 2 中它们含本模块 products（exportJars 时为
       // packageBin），resourceGenerators 再依赖它们会形成 resources -> packageBin -> resources 环而卡死。
-      val resources = (Compile / unmanagedResourceDirectories).value
+      val ownResources = (Compile / unmanagedResourceDirectories).value
       val depClasses = (Compile / classDirectory).all(ScopeFilter(inDependencies(ThisProject))).value
-      val classpath = classesDir +: (resources ++ CpFiles.files((Runtime / externalDependencyClasspath).value) ++ depClasses)
-      val registrarsFile = (Compile / resourceDirectory).value / RegistrarsPath
-      val metaRegistrarsFile = (Compile / resourceDirectory).value / MetaRegistrarsPath
-      val beangleXml = (Compile / resourceDirectory).value / BeangleXmlName
+      val depResources = (Compile / unmanagedResourceDirectories).all(ScopeFilter(inDependencies(ThisProject))).value
+      val external = CpFiles.files((Runtime / externalDependencyClasspath).value)
+      val classpath = CpFiles.generatorEntries(classesDir, ownResources, external, depClasses, depResources)
+      val registrarTexts =
+        ClasspathScan.readResources(classpath, RegistrarsPath) ++
+          ClasspathScan.readResources(classpath, MetaRegistrarsPath)
+      val xmlTexts = ClasspathScan.readResources(classpath, BeangleXmlName)
       val listFile = (Compile / target).value / "aot" / "aot-registrars.txt"
       val classesFile = (Compile / target).value / "aot" / "aot-classes.txt"
-      generate(registrarsFile, metaRegistrarsFile, beangleXml, listFile, classesFile, outDir, classpath, streams.value.log)
+      generate(registrarTexts, xmlTexts, listFile, classesFile, outDir, classpath, streams.value.log)
     },
     Compile / compilePostHooks += Def.task {
       (Compile / aotHints).value
@@ -91,17 +94,17 @@ object AotPlugin extends sbt.AutoPlugin {
     }.taskValue
   )
 
-  /** 合并 aot-registrars.txt、meta-registrars.txt 与 beangle.xml（jpa/orm mapping、cdi
-   * module）声明的 AotHintRegistrar 类、beangle.xml 的 web initializer 类为契约，由
-   * AotHintGenerator 统一生成配置：initializer 等按名加载类经 --classes 清单传入，
-   * 不作为 registrar 加载，生成器注册 public 构造器 + Scala object 伴生类。三者皆无
-   * 声明视为"项目无 AOT 提示"，正常跳过。
+  /** 合并各 classpath 条目声明的 aot/meta registrar 与 beangle.xml（mapping/module）
+   * 类为契约，由 AotHintGenerator 统一生成配置；web initializer 等按名加载类经
+   * `--classes` 清单传入，不作为 registrar 加载。全部条目皆无声明视为"无 AOT 提示"，
+   * 正常跳过。
    */
-  private def generate(registrarsFile: File, metaRegistrarsFile: File, beangleXml: File, listFile: File, classesFile: File, outDir: File, classpath: Seq[File], log: Logger): Seq[File] = {
-    val declared = collectRegistrars(registrarsFile, metaRegistrarsFile, beangleXml)
-    val classes = collectClasses(beangleXml)
+  private def generate(registrarTexts: Seq[String], xmlTexts: Seq[String], listFile: File,
+      classesFile: File, outDir: File, classpath: Seq[File], log: Logger): Seq[File] = {
+    val declared = collectRegistrars(registrarTexts, xmlTexts)
+    val classes = collectClasses(xmlTexts)
     if (declared.isEmpty && classes.isEmpty) {
-      log.debug(s"No $RegistrarsPath/$MetaRegistrarsPath nor modules in $BeangleXmlName; GraalVM config generation skipped")
+      log.debug(s"No $RegistrarsPath/$MetaRegistrarsPath nor modules in $BeangleXmlName on classpath; GraalVM config generation skipped")
       deleteStaleConfigs(outDir)
       return Nil
     }
@@ -116,28 +119,19 @@ object AotPlugin extends sbt.AutoPlugin {
     }
   }
 
-  /** 合并 aot-registrars.txt、meta-registrars.txt 与 beangle.xml（mapping/module）声明的
-   * AotHintRegistrar 类，去重保序。 */
-  private[sbt] def collectRegistrars(aotRegistrarsFile: File, metaRegistrarsFile: File, beangleXml: File): Seq[String] = {
+  /** 合并各 classpath 条目 aot/meta-registrars.txt 文本与 beangle.xml（mapping/module）
+   * 声明的 AotHintRegistrar 类，去重保序。 */
+  private[sbt] def collectRegistrars(registrarTexts: Seq[String], beangleXmlTexts: Seq[String]): Seq[String] = {
     val classNames = scala.collection.mutable.LinkedHashSet.empty[String]
-    if (aotRegistrarsFile.isFile) readLines(aotRegistrarsFile).foreach(classNames += _)
-    if (metaRegistrarsFile.isFile) readLines(metaRegistrarsFile).foreach(classNames += _)
-    if (beangleXml.isFile) GeneratorSupport.extractModuleClasses(beangleXml).foreach(classNames += _)
+    registrarTexts.foreach(text => GeneratorSupport.parseLines(text).foreach(classNames += _))
+    GeneratorSupport.extractModuleClasses(beangleXmlTexts).foreach(classNames += _)
     classNames.toSeq
   }
 
-  /** 从 beangle.xml 提取 web initializer 类（classes 清单，不要求是 AotHintRegistrar）。 */
-  private[sbt] def collectClasses(beangleXml: File): Seq[String] = {
-    if (beangleXml.isFile) GeneratorSupport.extractWebInitializerClasses(beangleXml) else Nil
-  }
-
-  /** 读取清单文件：每行一个类名，# 开头为注释，忽略空行。 */
-  private def readLines(file: File): Seq[String] = {
-    val source = scala.io.Source.fromFile(file, "UTF-8")
-    try {
-      source.getLines().map(_.trim).filter(l => l.nonEmpty && !l.startsWith("#")).toSeq
-    } finally source.close()
-  }
+  /** 从各 classpath 条目的 beangle.xml 提取 web initializer 类
+   * （classes 清单，不要求是 AotHintRegistrar）。 */
+  private[sbt] def collectClasses(beangleXmlTexts: Seq[String]): Seq[String] =
+    GeneratorSupport.extractWebInitializerClasses(beangleXmlTexts)
 
   private def writeList(file: File, classNames: Seq[String]): Unit = {
     file.getParentFile.mkdirs()

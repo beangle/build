@@ -11,7 +11,7 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
+ * You should have received a copy of the GNU Lesser General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
@@ -23,11 +23,23 @@ import xsbti.{FileConverter, HashedVirtualFileRef}
 
 import java.io.File as JFile
 
-/** sbt 2 classpath helpers (`HashedVirtualFileRef` → `java.io.File`). */
+/** sbt 2 classpath helpers（`HashedVirtualFileRef` → `java.io.File`）。 */
 object CpFiles {
   def file(entry: Attributed[HashedVirtualFileRef])(using conv: FileConverter): JFile =
     conv.toPath(entry.data).toFile
 
   def files(cp: Seq[Attributed[HashedVirtualFileRef]])(using FileConverter): Seq[JFile] =
     cp.map(file)
+
+  /** 汇总生成器可见的 classpath 条目（目录或 jar），按运行期优先级去重：
+   *  本模块 classes → 本模块资源目录 → 外部依赖 → 依赖项目 classes → 依赖项目资源目录。
+   *
+   *  中心化生成（AotPlugin/MetaPlugin/ProxyPlugin 在终端项目启用）以此为锚点与资源
+   *  扫描范围：内容来自本模块与全部依赖库。
+   */
+  def generatorEntries(ownClasses: JFile, ownResourceDirs: Seq[JFile], external: Seq[JFile],
+      depClasses: Seq[JFile], depResourceDirs: Seq[Seq[JFile]]): Seq[JFile] = {
+    val all = ownClasses +: (ownResourceDirs ++ external ++ depClasses ++ depResourceDirs.flatten)
+    ClasspathScan.distinct(all)
+  }
 }

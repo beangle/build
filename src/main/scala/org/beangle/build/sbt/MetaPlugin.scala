@@ -26,23 +26,21 @@ import java.io.File
 
 /** Generates `META-INF/beangle/beanmeta.idx` from compiled classes.
  *
- *  Auto-enabled on every JVM project. Generation is driven by the anchor files
- *  `src/main/resources/META-INF/beangle/meta-registrars.txt` (one MetaRegistrar class
- *  name per line, `#` comments allowed) and `src/main/resources/beangle.xml`; projects
- *  with neither are skipped without error, so no explicit opt-in is needed.
+ * 手动启用（`trigger = noTrigger`），通常在终端项目（最终应用）显式
+ * `enablePlugins(MetaPlugin)`。库项目只负责在自身资源中声明锚点，不再各自生成 idx。
  *
- *  Reads both anchors for declared modules (`<jpa>/<orm><mapping class>` and
- *  `<cdi><module class>` in beangle.xml, plus meta-registrars.txt lines, all
- *  MetaRegistrar subclasses such as MappingModule/BindModule) as the contract: every
- *  declared class must be found, otherwise generation fails with an error. Writes a
- *  combined beanmeta.idx into `resourceManaged`; [[CompileHookPlugin]] drives it as a
- *  post-compile hook so it lands in the packaged JAR automatically. Test-scope anchors
- *  are supported via `Test / metaIndex`.
+ * 生成是"集中式"的：以整个运行时 classpath（本模块 classes/资源目录 + 依赖项目
+ * classes/资源目录 + 外部依赖 jar）为输入，遍历每个条目读取
+ * `META-INF/beangle/meta-registrars.txt`（每行一个 MetaRegistrar 类名，`#` 注释）与
+ * `beangle.xml`（`<jpa>/<orm><mapping class>` 和 `<cdi><module class>`，均为
+ * MetaRegistrar 子类如 MappingModule/BindModule），跨条目合并为注册器契约：每个声明
+ * 类必须在 classpath 上找到，否则生成失败。写一份合并的 beanmeta.idx 到本模块
+ * `resourceManaged`；[[CompileHookPlugin]] 作为编译后钩子驱动，随终端产物打包。
  *
- *  Runtime lookup: [[org.beangle.commons.bean.meta.MetaModels]] reads
- *  `classpath*:META-INF/beangle/beanmeta.idx` at startup.
+ * 运行时查找：[[org.beangle.commons.bean.meta.MetaModels]] 读取
+ * `classpath*:META-INF/beangle/beanmeta.idx`，集中生成后各模块不再单独携带 idx。
  *
- *  For GraalVM native-image configuration, see [[AotPlugin]].
+ * 对于 GraalVM native-image 配置，参见 [[AotPlugin]]。
  */
 object MetaPlugin extends sbt.AutoPlugin {
 
@@ -51,12 +49,12 @@ object MetaPlugin extends sbt.AutoPlugin {
   private val BeangleXmlName = "beangle.xml"
 
   object autoImport {
-    val metaIndex = taskKey[Option[File]]("Generate META-INF/beangle/beanmeta.idx from MetaRegistrar classes declared in beangle.xml or meta-registrars.txt")
+    val metaIndex = taskKey[Option[File]]("Generate consolidated META-INF/beangle/beanmeta.idx from MetaRegistrar classes declared across the runtime classpath")
   }
 
   import autoImport.*
 
-  override def trigger = allRequirements
+  override def trigger = noTrigger
 
   override val projectSettings: Seq[Setting[?]] = Seq(
     Compile / metaIndex := Def.uncached {
@@ -64,17 +62,17 @@ object MetaPlugin extends sbt.AutoPlugin {
       val classesDir = (Compile / classDirectory).value
       val outDir = (Compile / resourceManaged).value
       val outputPath = outDir / OutputPath
-      val registrarsFile = (Compile / resourceDirectory).value / RegistrarsPath
-      val beangleXml = (Compile / resourceDirectory).value / BeangleXmlName
-      val listFile = (Compile / target).value / "meta" / "beanmeta-registrars.txt"
       // post-compile 钩子早于 copyResources，classDirectory 尚未物化本模块资源；
-      // 补上未管理资源目录（src/main/resources），使生成器子进程按运行期 classpath 语义
-      // 可见本模块 beangle.xml 等类路径扫描输入。本模块 classes/资源放最前，避免依赖项目
-      // 同名资源遮蔽（与运行期 classpath 语义一致）。
-      val resources = (Compile / unmanagedResourceDirectories).value
+      // 显式包含各条目资源目录（本模块与依赖项目），使声明锚点按运行期 classpath 语义可见。
+      val ownResources = (Compile / unmanagedResourceDirectories).value
       val depClasses = (Compile / classDirectory).all(ScopeFilter(inDependencies(ThisProject))).value
-      val classpath = classesDir +: (resources ++ CpFiles.files((Runtime / externalDependencyClasspath).value) ++ depClasses)
-      generate(registrarsFile, beangleXml, listFile, outputPath, classpath, streams.value.log)
+      val depResources = (Compile / unmanagedResourceDirectories).all(ScopeFilter(inDependencies(ThisProject))).value
+      val external = CpFiles.files((Runtime / externalDependencyClasspath).value)
+      val classpath = CpFiles.generatorEntries(classesDir, ownResources, external, depClasses, depResources)
+      val registrarTexts = ClasspathScan.readResources(classpath, RegistrarsPath)
+      val xmlTexts = ClasspathScan.readResources(classpath, BeangleXmlName)
+      val listFile = (Compile / target).value / "meta" / "beanmeta-registrars.txt"
+      generate(registrarTexts, xmlTexts, listFile, outputPath, classpath, streams.value.log)
     },
     Compile / compilePostHooks += Def.task {
       (Compile / metaIndex).value
@@ -86,14 +84,17 @@ object MetaPlugin extends sbt.AutoPlugin {
       val classesDir = (Test / classDirectory).value
       val outDir = (Test / resourceManaged).value
       val outputPath = outDir / OutputPath
-      val registrarsFile = (Test / resourceDirectory).value / RegistrarsPath
-      val beangleXml = (Test / resourceDirectory).value / BeangleXmlName
-      val listFile = (Test / target).value / "meta" / "beanmeta-registrars.txt"
+      val ownResources = (Test / unmanagedResourceDirectories).value
       val mainClasses = (Compile / classDirectory).value
+      val mainResources = (Compile / unmanagedResourceDirectories).value
       val depClasses = (Compile / classDirectory).all(ScopeFilter(inDependencies(ThisProject))).value
-      val resources = (Test / unmanagedResourceDirectories).value
-      val classpath = classesDir +: (mainClasses +: (resources ++ CpFiles.files((Test / externalDependencyClasspath).value) ++ depClasses))
-      generate(registrarsFile, beangleXml, listFile, outputPath, classpath, streams.value.log)
+      val depResources = (Compile / unmanagedResourceDirectories).all(ScopeFilter(inDependencies(ThisProject))).value
+      val external = mainClasses +: (mainResources ++ CpFiles.files((Test / externalDependencyClasspath).value))
+      val classpath = CpFiles.generatorEntries(classesDir, ownResources, external, depClasses, depResources)
+      val registrarTexts = ClasspathScan.readResources(classpath, RegistrarsPath)
+      val xmlTexts = ClasspathScan.readResources(classpath, BeangleXmlName)
+      val listFile = (Test / target).value / "meta" / "beanmeta-registrars.txt"
+      generate(registrarTexts, xmlTexts, listFile, outputPath, classpath, streams.value.log)
     },
     Test / compilePostHooks += Def.task {
       (Test / metaIndex).value
@@ -101,15 +102,16 @@ object MetaPlugin extends sbt.AutoPlugin {
     }.taskValue
   )
 
-  /** 合并 meta-registrars.txt 与 beangle.xml（jpa/orm mapping、cdi module）声明的
-   * MetaRegistrar 类为契约生成 beanmeta.idx：插件负责解析声明来源，写入清单文件后
-   * 交给 MetaGenerator（--registrars）。两者皆无声明视为"项目无 bean 元数据"，
-   * 正常跳过。
+  /** 合并各 classpath 条目 meta-registrars.txt 与 beangle.xml（jpa/orm mapping、cdi
+   * module）声明的 MetaRegistrar 类为契约生成 beanmeta.idx：插件负责解析声明来源，
+   * 写入清单文件后交给 MetaGenerator（--registrars）。全部条目皆无声明视为
+   * "无 bean 元数据"，正常跳过。
    */
-  private def generate(registrarsFile: File, beangleXml: File, listFile: File, output: File, classpath: Seq[File], log: Logger): Option[File] = {
-    val classNames = collectRegistrars(registrarsFile, beangleXml)
+  private def generate(registrarTexts: Seq[String], beangleXmlTexts: Seq[String],
+      listFile: File, output: File, classpath: Seq[File], log: Logger): Option[File] = {
+    val classNames = collectRegistrars(registrarTexts, beangleXmlTexts)
     if (classNames.isEmpty) {
-      log.debug(s"No $RegistrarsPath nor mapping/module in $BeangleXmlName; beanmeta.idx generation skipped")
+      log.debug(s"No $RegistrarsPath nor mapping/module in $BeangleXmlName on classpath; beanmeta.idx generation skipped")
       if (output.exists()) output.delete()
       return None
     }
@@ -123,20 +125,13 @@ object MetaPlugin extends sbt.AutoPlugin {
     }
   }
 
-  /** 合并 meta-registrars.txt 与 beangle.xml（mapping/module）声明的 MetaRegistrar 类，去重保序。 */
-  private[sbt] def collectRegistrars(registrarsFile: File, beangleXml: File): Seq[String] = {
+  /** 合并各 classpath 条目 meta-registrars.txt 与 beangle.xml（mapping/module）声明的
+   * MetaRegistrar 类，去重保序。 */
+  private[sbt] def collectRegistrars(registrarTexts: Seq[String], beangleXmlTexts: Seq[String]): Seq[String] = {
     val classNames = scala.collection.mutable.LinkedHashSet.empty[String]
-    if (registrarsFile.isFile) readLines(registrarsFile).foreach(classNames += _)
-    if (beangleXml.isFile) GeneratorSupport.extractModuleClasses(beangleXml).foreach(classNames += _)
+    registrarTexts.foreach(text => GeneratorSupport.parseLines(text).foreach(classNames += _))
+    GeneratorSupport.extractModuleClasses(beangleXmlTexts).foreach(classNames += _)
     classNames.toSeq
-  }
-
-  /** 读取清单文件：每行一个类名，# 开头为注释，忽略空行。 */
-  private def readLines(file: File): Seq[String] = {
-    val source = scala.io.Source.fromFile(file, "UTF-8")
-    try {
-      source.getLines().map(_.trim).filter(l => l.nonEmpty && !l.startsWith("#")).toSeq
-    } finally source.close()
   }
 
   private def writeList(file: File, classNames: Seq[String]): Unit = {

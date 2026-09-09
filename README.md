@@ -29,28 +29,33 @@ sbt.version=2.0.3
 | [PomPlugin](docs/pom.md) | 自动 | 打包时内嵌 Maven 元信息（META-INF/maven） | [pom.md](docs/pom.md) |
 | [BootPlugin](docs/boot.md) | 自动 | 生成 beangle-boot 运行时依赖元数据 | [boot.md](docs/boot.md) |
 | [CompileHookPlugin](docs/compile-hook.md) | 自动 | 统一提供编译前/后钩子扩展点 | [compile-hook.md](docs/compile-hook.md) |
-| [MetaPlugin](docs/meta.md) | 自动 | 生成 bean 元数据索引 `beanmeta.idx` | [meta.md](docs/meta.md) |
-| [AotPlugin](docs/aot.md) | 自动 | 生成 GraalVM native-image 配置文件 | [aot.md](docs/aot.md) |
-| [ProxyPlugin](docs/proxy.md) | 自动 | 生成 Hibernate 懒加载代理类 | [proxy.md](docs/proxy.md) |
 | [DdlPlugin](docs/ddl.md) | 自动 | 生成 DDL 报告与版本间 DDL diff | [ddl.md](docs/ddl.md) |
 | [OrmPlugin](docs/orm.md) | 自动 | 从 ORM 映射生成建表 DDL | [orm.md](docs/orm.md) |
+| [MetaPlugin](docs/meta.md) | 手动（终端） | 聚合全 classpath 生成 bean 元数据索引 `beanmeta.idx` | [meta.md](docs/meta.md) |
+| [AotPlugin](docs/aot.md) | 手动（终端） | 聚合全 classpath 生成 GraalVM native-image 配置 | [aot.md](docs/aot.md) |
+| [ProxyPlugin](docs/proxy.md) | 手动（终端） | 聚合全 classpath 生成 Hibernate 懒加载代理类 | [proxy.md](docs/proxy.md) |
 | [WarPlugin](docs/war.md) | 手动 | Web 应用 war 打包与增量 diff | [war.md](docs/war.md) |
 | [SnapshotPlugin](docs/snapshot.md) | 手动 | 快照版本 war/jar 构建与上传 | [snapshot.md](docs/snapshot.md) |
 | [TomcatPlugin](docs/tomcat.md) | 手动 | 开发期启动嵌入式 Tomcat | [tomcat.md](docs/tomcat.md) |
 | [UndertowPlugin](docs/undertow.md) | 手动 | 提供嵌入式 Undertow 测试依赖 | [undertow.md](docs/undertow.md) |
 
 > 自动启用：`trigger = allRequirements`，引入插件后即生效；多数生成器在没有对应锚点
-> 文件（如 `beangle.xml`）时自动跳过，无需显式配置。手动插件需 `.enablePlugins(...)`。
+> 文件（如 `beangle.xml`）时自动跳过，无需显式配置。手动插件需 `.enablePlugins(...)`；
+> 其中 AotPlugin、MetaPlugin、ProxyPlugin 为**终端集中式**生成器，由最终应用
+> （war/native-image）显式启用，扫描整个运行时 classpath 聚合各依赖库的声明锚点，
+> 库项目只负责携带声明、不再各自生成配置产物。
 
 ## 典型组合
 
-- **普通库项目**：StylePlugin（编译前检查）+ StatPlugin + BootPlugin + MetaPlugin
-  （有 `beangle.xml` 时自动生成 `beanmeta.idx`）。
+- **普通库项目**：StylePlugin（编译前检查）+ StatPlugin + BootPlugin；如需声明
+  bean 元数据 / AOT 提示，在 `src/main/resources` 放置 `meta-registrars.txt`、
+  `aot-registrars.txt`、`beangle.xml`，由终端项目统一聚合。
 - **Web 应用项目**：显式启用 `WarPlugin`，依赖清单自动嵌入
   `WEB-INF/classes/META-INF/beangle/dependencies`，可用
   [beangle boot](https://github.com/beangle/boot) 一键启动。
-- **GraalVM native-image**：AotPlugin 自动收集 `AotHintRegistrar` 生成配置，
-  配合 MetaPlugin、ProxyPlugin 的产物一起打包。
+- **GraalVM native-image**：终端项目显式启用 `AotPlugin`（可配合 `MetaPlugin`、
+  `ProxyPlugin`），编译后跨整个运行时 classpath 收集声明，生成一份合并的
+  `reachability-metadata.json` 与 `beanmeta.idx` / 懒加载代理。
 - **ORM 项目**：OrmPlugin 生成多数据库建表 DDL，DdlPlugin 生成 SQL 报告与迁移脚本。
 
 ## 文档
