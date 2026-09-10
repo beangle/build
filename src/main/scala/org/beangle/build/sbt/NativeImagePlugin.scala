@@ -6,6 +6,7 @@ import sbt.plugins.JvmPlugin
 import xsbti.FileConverter
 
 import java.io.File
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 import scala.sys.process.Process
 import scala.util.Properties
@@ -19,6 +20,10 @@ import scala.util.Properties
   * Classpath 条目在写入参数文件前统一 realpath：sbt 2 的 CAS 使产物 jar 的 id 是
   * `${OUT}/…` 符号链接，驱动展开时也会 realpath 成 `~/.cache/sbt/v2/cas/…` 物理
   * 路径，同一文件会出现两条 URL（模块/资源双份加载）。提前归一化后收敛为单一路径。
+  *
+  * 归一化后立即校验无重复条目，写盘后按参数文件再校验一次：同一个 jar 被收录两次
+  * 会让 native-image 以两条 URL 注册其类与资源（`getResources` 返回双份，模块/
+  * 初始化器/静态资源重复注册），这里直接 fail，而不是留到运行期去容错。
   */
 object NativeImagePlugin extends sbt.AutoPlugin {
   override def requires = JvmPlugin
@@ -64,6 +69,7 @@ object NativeImagePlugin extends sbt.AutoPlugin {
 
       // 全部参数写入 @argument file：classpath 条目先 realpath 归一化（CAS 链接 → 物理路径）。
       val cp = (Compile / fullClasspath).value.map(a => realPath(conv.toPath(a.data)))
+      assertNoDuplicates(cp.map(_.toString), "classpath")
       val cpStr = cp.mkString(File.pathSeparator)
       val dir = (NativeImage / target).value
       dir.mkdirs()
@@ -71,6 +77,7 @@ object NativeImagePlugin extends sbt.AutoPlugin {
       writeArgsFile(
         argsFile,
         Seq("-cp", cpStr) ++ nativeImageOptions.value ++ Seq(main, output.absolutePath))
+      assertNoDuplicates(readArgsClasspath(argsFile), s"${argsFile.getName} -cp")
 
       val command = nativeImageCommand.value :+ s"@${argsFile.absolutePath}"
       streams.value.log.info(command.mkString(" "))
@@ -85,16 +92,46 @@ object NativeImagePlugin extends sbt.AutoPlugin {
     try p.toRealPath()
     catch case _: Exception => p
 
+  /** 拒绝重复条目：重复即构建失败，并列出重复项。 */
+  private[sbt] def assertNoDuplicates(entries: Seq[String], label: String): Unit = {
+    val duplicated = entries.groupBy(identity).collect { case (e, xs) if xs.sizeIs > 1 => e }.toSeq.sorted
+    if duplicated.nonEmpty then
+      throw new MessageOnlyException(s"duplicated $label entries: ${duplicated.mkString(", ")}")
+  }
+
+  /** 读回参数文件里最终的 `-cp`，用于写盘后的二次校验。 */
+  private[sbt] def readArgsClasspath(file: File): Seq[String] = {
+    val lines = new String(Files.readAllBytes(file.toPath), StandardCharsets.UTF_8).linesIterator.toSeq
+    val index = lines.indexOf("-cp")
+    if index < 0 || index + 1 >= lines.size then Nil
+    else unquote(lines(index + 1)).split(File.pathSeparator).toSeq
+  }
+
   private def writeArgsFile(file: File, args: Seq[String]): Unit =
     IO.write(file, args.map(quoteIfNeeded).mkString("\n") + "\n")
 
   /** 参数文件按空白拆分 token，含空白/引号的参数需加引号包裹。 */
-  private def quoteIfNeeded(arg: String): String =
+  private[sbt] def quoteIfNeeded(arg: String): String =
     if arg.exists(c => c.isWhitespace || c == '"' || c == '\\') then
       "\"" + arg.flatMap {
         case '"'  => "\\\""
         case '\\' => "\\\\"
         case c    => c.toString
       } + "\""
+    else arg
+
+  /** [[quoteIfNeeded]] 的逆操作。 */
+  private[sbt] def unquote(arg: String): String =
+    if arg.length >= 2 && arg.head == '"' && arg.last == '"' then
+      val buf = new StringBuilder
+      var i = 1
+      while i < arg.length - 1 do
+        if arg.charAt(i) == '\\' && i + 1 < arg.length - 1 then
+          buf.append(arg.charAt(i + 1))
+          i += 2
+        else
+          buf.append(arg.charAt(i))
+          i += 1
+      buf.toString
     else arg
 }
