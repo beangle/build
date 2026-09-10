@@ -101,6 +101,11 @@ python -m jsonschema -i reachability-metadata.json \
 - `type.lambda`：必填 `declaringClass`（lambda 所在类）与 `interfaces`（非空，lambda 实现的
   函数式接口）；`declaringMethod` 可选（对象，形如 `{"name": "...", "parameterTypes": [...]}`，
   用于精确定位同一个 declaringClass 里的多个 lambda）。
+- **数组类型用源码写法**：`java.lang.String[]`、`int[]`、`int[][]`，而不是 JVM 描述符
+  （`[Ljava.lang.String;`、`[I`）。schema 的 `typeName` 正则 `^[^.;\[/]+(\.[^.;\[/]+)*(\[])*$`
+  不接受 `[`/`;`，官方文档示例同样用 `Object[]`/`String[]` 形式。native-image 25 实测两种
+  写法都能解析（同一份元数据下"registered for reflection"的类型数完全一致），但描述符写法
+  过不了 schema 校验，生成器统一在输出时归一化（见 `AotHintGenerator.typeName`）。
 
 ### 4.2 注册字段
 
@@ -123,6 +128,20 @@ python -m jsonschema -i reachability-metadata.json \
 
 - v1.2.0 条目 `additionalProperties: false`，**`comment` 只允许出现在顶层**，条目内
   写 `comment` 会校验失败；需要注释就写 `reason`，文件级注释用顶层 `comment`。
+
+> **`queryAll*` 在 v1.2.0 已删除，且写错会静默失效**：GraalVM 21/22 时代
+> `reflect-config.json` 还有 `queryAllDeclaredMethods` / `queryAllPublicMethods` /
+> `queryAllDeclaredConstructors` / `queryAllPublicConstructors` 四个"只登记元数据、
+> 不允许 invoke"的标志（`all*` 则兼可查找与调用）。新格式只保留 `all*`，schema 中
+> 也没有 query-only 语义，因此：
+> - 新格式里写 `queryAll*` → native-image 打印
+>   `Warning: Unknown attribute(s) [queryAllXxx] in reflection class descriptor object`，
+>   并把**该条目的未知属性丢弃**（`getDeclaredMethods` 等元数据查询随后在镜像里失败）；
+> - 只有**旧文件名** (`reflect-config.json`) 走的 legacy 解析器仍认识这些标志（例如
+>   hibernate fork jar 内嵌的旧文件），所以"旧文件里能用、新文件里报 Unknown attribute"
+>   是版本演进造成的差异，不是配置写错位置。
+> - 迁移建议：`Query*` 一律归并为对应的 `all*`（功能是超集，镜像会略大）；需要更小
+>   镜像时用 `methods` 定点注册替代批量注册，而不是回退到 `queryAll*`。
 
 ### 4.3 methods 定点注册
 
@@ -332,7 +351,9 @@ GraalVM 25 起 `--enable-url-protocols` / `--enable-http(s)` 弃用，JDK URL �
 | **v1.2.0（25+ 本文档目标）** | `comment` `reflection` `resources` `foreign` | JNI → `jniAccessible`、序列化 → `serializable`、资源包 → `bundle`，全部折叠进条目 |
 
 - v1.2.0 相对 v1.1.0 的移除项：顶层 `jni` / `serialization` / `bundles` 三个数组；
-  reflection 条目新增 `serializable` / `jniAccessible` / `unsafeAllocated`。
+  reflection 条目新增 `serializable` / `jniAccessible` / `unsafeAllocated`；
+  reflection 条目**移除 `queryAll*` 系列批量标志**（仅 legacy `reflect-config.json`
+  解析器仍识别，新格式里出现即 "Unknown attribute(s)" 警告并被忽略，见 4.2 注）。
 - GraalVM JDK 21 分支通过 backport 也支持新格式与 v1.x schema（个别新特性可能不可用），
   若必须支持 21 系构建，请以对应版本 schema 校验，不要照抄 25 全部字段。
 - schema 文件随 GraalVM 演进，均在 oracle/graal 仓库
