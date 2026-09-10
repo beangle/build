@@ -26,6 +26,8 @@ lambda、FFM）需要构建期元数据。GraalVM 把原先按功能拆分的多
   旧 schema 校验（assets 目录下按版本存放）。
 - GraalVM 21/22/24 系也能读取新格式的早期版本（v1.x），部分新字段可能不识别；
   不要假设旧版本具备 v1.2.0 全部语义。
+- 本文涉及的新字段中，**`jniAccessible` 是 25 新增**（旧版本只有顶层 `jni` /
+  `jni-config.json`，见 4.6）；`--enable-url-protocols` 弃用同为 25 起（见 4.5）。
 - native-image 对**旧的 reflect-config.json 等分文件格式仍然向后兼容读取**（25 上旧文件
   仍能生效），但官方明确在向新格式迁移，新输出一律写 `reachability-metadata.json`。
 - 未来版本中"反射缺失即报错"的严格行为将成为默认，建议尽早采用新格式（见第 9 节）。
@@ -122,7 +124,7 @@ python -m jsonschema -i reachability-metadata.json \
 | `fields` | 数组 | 定点字段注册，元素 `{ "name": "..." }`（仅 name） |
 | `unsafeAllocated` | bool, false | 允许 `Unsafe.allocateInstance` / JNI `AllocObject` 无构造器实例化 |
 | `serializable` | bool, false | 注册为标准 Java 序列化类型（对应旧 serialization-config） |
-| `jniAccessible` | bool, false | 类型及其已注册字段/方法同时开放给 JNI（对应旧 jni-config） |
+| `jniAccessible` | bool, false | 类型开放给 JNI（`FindClass`）；**成员需另用 `methods`/`fields` 或 `all*` 标志**，见 4.6 |
 | `condition` | 对象 | 条件注册，见第 5 节 |
 | `reason` | string 或数组 | 说明性文字，无运行时语义 |
 
@@ -211,6 +213,56 @@ GraalVM 25 起 `--enable-url-protocols` / `--enable-http(s)` 弃用，JDK URL �
 - `file`/`resource`/`jrt` 协议由 native-image 内置，无需登记。
 
 参考：<https://www.graalvm.org/latest/reference-manual/native-image/dynamic-features/URLProtocols/>
+
+### 4.6 JNI：`jniAccessible`（25 新增，取代顶层 `jni`）
+
+`jniAccessible` 是 **GraalVM 25 / schema v1.2.0 新增**，取代旧的顶层 `jni` 数组和
+独立 `jni-config.json`。官方 25 发行说明原文：*"JNI registration is now included as
+part of the 'reflection' section … using the 'jniAccessible' attribute. Registrations
+performed through the 'jni' section … and through jni-config.json will still be
+accepted."*（旧的仍被读取，但新输出一律用 `jniAccessible`。）
+
+条目写法（方法/字段成员与反射共用 `methods`/`fields` 结构）：
+
+```json
+{
+  "reflection": [
+    { "type": "sun.net.www.protocol.http.Handler",
+      "jniAccessible": true,
+      "methods": [ { "name": "<init>", "parameterTypes": [] } ] },
+    { "type": "com.example.NativeBridge",
+      "jniAccessible": true,
+      "allDeclaredMethods": true,
+      "fields": [ { "name": "handle" } ] }
+  ]
+}
+```
+
+**最容易踩的坑：只登记类型不够。**
+
+- `jniAccessible: true` 只保证本机代码能 `FindClass` 到该类型；
+- 通过 `GetMethodID`/`GetStaticMethodID` 查方法时，方法必须**同时**出现在 `methods`
+  里（或用 `allDeclaredMethods`/`allPublicMethods` 覆盖）；字段同理需要 `fields` /
+  `allDeclaredFields`/`allPublicFields`；
+- 漏登记成员时的报错来自 `JNIFunctions$Support.getMethodID`，表现为
+  `java.lang.NoSuchMethodError: <类>.<方法>(<签名>)`（**不是** `ClassNotFoundException`）。
+  注意这是**运行期按名查找失败**，两种原因长得一样："压根没登记"与"登记的名字和
+  native 侧实际查找的名字不一致"（如 JDK 25 把 `Font2D.charToGlyph` 改成了
+  `charToGlyphRaw`），排查时要同时核对注册清单和 native 库里的真实符号；
+- `allDeclared*`/`allPublic*` 对 JNI 同样生效，可用于粗粒度开放；
+- `unsafeAllocated`（对应 JNI `AllocObject`）是**独立字段**，不需要 `jniAccessible`；
+- `methods` 的参数类型、`<init>` 构造器写法与 4.3 节完全相同。
+
+与旧格式对照：
+
+| 旧（v1.1.0 / `jni-config.json`） | 新（v1.2.0） |
+|----------------------------------|--------------|
+| 顶层 `"jni": [ { "name": "X", ... } ]` | `reflection` 条目 `"type": "X", "jniAccessible": true` |
+| 条目键 `name` | 条目键 `type` |
+
+实测补充：JNI 回调名随 JDK 版本会变（尤其 `sun.font.*` 等内部类），例如 JDK 25 的
+`Font2D.charToGlyph` → `charToGlyphRaw`。核对办法是 `strings $GRAAL/lib/libfontmanager.so`
+看导出/引用名表，或直接用 tracing agent 采集，不要照抄旧版本文档。
 
 ---
 
@@ -319,7 +371,7 @@ GraalVM 25 起 `--enable-url-protocols` / `--enable-http(s)` 弃用，JDK URL �
 | `reflect-config.json` | `reflection` 数组 | 顶层是**数组** vs 顶层对象；条目 `name` → `type` |
 | `proxy-config.json` | `reflection` 条目 `type: { "proxy": [...] }` | 不再单独成文件 |
 | `serialization-config.json` | `reflection` 条目 `"serializable": true` | 顶层 `serialization` 数组 v1.2.0 已移除 |
-| `jni-config.json` | `reflection` 条目 `"jniAccessible": true` | v1.2.0 顶层无 `jni` 数组（官方文档表格是旧文，以 schema 为准） |
+| `jni-config.json` | `reflection` 条目 `"jniAccessible": true` | v1.2.0 顶层无 `jni` 数组（官方文档表格是旧文，以 schema 为准）；成员仍需 `methods`/`fields`，见 4.6 |
 | `resource-config.json`（正则资源） | `resources` 条目 `glob` | 正则 → glob 语义，见 6.1 |
 | bundles（`ResourceBundle`） | `resources` 条目 `bundle` | 不再单独成段 |
 | `typeReachable`（旧条件） | `typeReached` | 语义从可达性改为运行期到达，见第 5 节 |
@@ -354,6 +406,8 @@ GraalVM 25 起 `--enable-url-protocols` / `--enable-http(s)` 弃用，JDK URL �
   reflection 条目新增 `serializable` / `jniAccessible` / `unsafeAllocated`；
   reflection 条目**移除 `queryAll*` 系列批量标志**（仅 legacy `reflect-config.json`
   解析器仍识别，新格式里出现即 "Unknown attribute(s)" 警告并被忽略，见 4.2 注）。
+- `jniAccessible` 是 **25 新增**（21 系 backport 未包含，只能用顶层 `jni`/`jni-config.json`）；
+  语义上它只开放"类型可被 `FindClass`"，成员仍要 `methods`/`fields` 或 `all*`（见 4.6）。
 - GraalVM JDK 21 分支通过 backport 也支持新格式与 v1.x schema（个别新特性可能不可用），
   若必须支持 21 系构建，请以对应版本 schema 校验，不要照抄 25 全部字段。
 - schema 文件随 GraalVM 演进，均在 oracle/graal 仓库
