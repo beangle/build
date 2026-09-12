@@ -33,6 +33,7 @@ sbt.version=2.0.3
 | [OrmPlugin](docs/orm.md) | 自动 | 从 ORM 映射生成建表 DDL | [orm.md](docs/orm.md) |
 | [MetaPlugin](docs/meta.md) | 手动（终端） | 聚合全 classpath 生成 bean 元数据索引 `beanmeta.idx` | [meta.md](docs/meta.md) |
 | [AotPlugin](docs/aot.md) | 手动（终端） | 聚合全 classpath 生成 GraalVM native-image 配置 | [aot.md](docs/aot.md) |
+| [NativeImagePlugin](docs/native.md) | 手动 | GraalVM 原生镜像链接与 tar.gz 分发打包 | [native.md](docs/native.md) |
 | [ProxyPlugin](docs/proxy.md) | 手动（终端） | 聚合全 classpath 生成 Hibernate 懒加载代理类 | [proxy.md](docs/proxy.md) |
 | [WarPlugin](docs/war.md) | 手动 | Web 应用 war 打包与增量 diff | [war.md](docs/war.md) |
 | [SnapshotPlugin](docs/snapshot.md) | 手动 | 快照版本 war/jar 构建与上传 | [snapshot.md](docs/snapshot.md) |
@@ -55,7 +56,8 @@ sbt.version=2.0.3
   [beangle boot](https://github.com/beangle/boot) 一键启动。
 - **GraalVM native-image**：终端项目显式启用 `AotPlugin`（可配合 `MetaPlugin`、
   `ProxyPlugin`），编译后跨整个运行时 classpath 收集声明，生成一份合并的
-  `reachability-metadata.json` 与 `beanmeta.idx` / 懒加载代理。
+  `reachability-metadata.json` 与 `beanmeta.idx` / 懒加载代理；再用
+  `NativeImagePlugin` 链接成原生可执行文件，打包为 `tar.gz` 分发。
 - **ORM 项目**：OrmPlugin 生成多数据库建表 DDL，DdlPlugin 生成 SQL 报告与迁移脚本。
 
 ## 文档

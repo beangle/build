@@ -21,6 +21,7 @@
 |------|------|------|
 | MetaPlugin | 聚合全 classpath 生成 bean 元数据索引 `beanmeta.idx`（终端） | [meta.md](meta.md) |
 | AotPlugin | 聚合全 classpath 生成 GraalVM native-image 配置（终端） | [aot.md](aot.md) |
+| NativeImagePlugin | GraalVM 原生镜像链接与 tar.gz 分发打包 | [native.md](native.md) |
 | ProxyPlugin | 聚合全 classpath 生成 Hibernate 懒加载代理类（终端） | [proxy.md](proxy.md) |
 | WarPlugin | Web 应用 war 打包与增量 diff | [war.md](war.md) |
 | SnapshotPlugin | 快照版本 war/jar 构建与上传 | [snapshot.md](snapshot.md) |
