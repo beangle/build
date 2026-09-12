@@ -4,7 +4,6 @@ import sbt.*
 import sbt.Keys.*
 import sbt.plugins.JvmPlugin
 import xsbti.FileConverter
-
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
@@ -39,6 +38,14 @@ object NativeImagePlugin extends sbt.AutoPlugin {
       "Extra arguments passed to the native-image optimizer.")
     @transient val nativeImageOutput: TaskKey[xsbti.VirtualFileRef] = taskKey[xsbti.VirtualFileRef](
       "The binary produced by native-image.")
+    val nativeDist: TaskKey[File] = taskKey[File](
+      "Package the native image (binary + runtime libraries) into a distributable archive.")
+    val nativeDistClassifier: SettingKey[String] = settingKey[String](
+      "Platform classifier used in the nativeDist file name.")
+    val nativeDistLocalRepo: SettingKey[File] = settingKey[File](
+      "Local maven repository that nativeDistInstall writes to (default ~/.m2/repository).")
+    val nativeDistInstall: TaskKey[Seq[File]] = taskKey[Seq[File]](
+      "Install the native distribution and its pom into the local maven repository.")
   }
 
   import autoImport.*
@@ -57,6 +64,34 @@ object NativeImagePlugin extends sbt.AutoPlugin {
     nativeImageOutput := {
       val out = (NativeImage / target).value / name.value
       xsbti.VirtualFileRef.of(out.absolutePath)
+    },
+    nativeDistClassifier := platformClassifier(System.getProperty("os.name"), System.getProperty("os.arch")),
+    nativeDistLocalRepo := sbt.Path.userHome / ".m2" / "repository",
+    nativeDist := Def.uncached {
+      implicit val conv: FileConverter = fileConverter.value
+      // 触发链接并拿到可执行文件的真实路径（CAS 下是符号链接）
+      val binary = conv.toPath(nativeImage.value).toFile
+      val dir = binary.getParentFile
+      val out = dir.getParentFile / s"${name.value}-${version.value}-${nativeDistClassifier.value}.tar.gz"
+      packageDist(dir, distEntries(dir, binary), out)
+      writeChecksum(out)
+      writeSha1(out)
+      streams.value.log.info(s"native distribution: ${out.absolutePath}")
+      streams.value.log.info(s"native distribution sha1: ${digestHex(out, "SHA-1")}")
+      out
+    },
+    nativeDistInstall := Def.uncached {
+      implicit val conv: FileConverter = fileConverter.value
+      val artifact = nativeDist.value
+      val installed = installToMavenLocal(
+        nativeDistLocalRepo.value,
+        organization.value,
+        name.value,
+        version.value,
+        artifact,
+        conv.toPath(makePom.value).toFile)
+      streams.value.log.info(s"installed native distribution: ${installed.head.absolutePath}")
+      installed
     },
     nativeImage := Def.uncached {
       val _ = (Compile / products).value
@@ -86,6 +121,82 @@ object NativeImagePlugin extends sbt.AutoPlugin {
       nativeImageOutput.value
     }
   )
+
+  /** 发行包文件名里的平台标签：`linux-amd64` / `darwin-arm64` / `windows-amd64`。 */
+  private[sbt] def platformClassifier(osName: String, osArch: String): String = {
+    val os =
+      if osName.startsWith("Linux") then "linux"
+      else if osName.contains("Mac") || osName.contains("Darwin") then "darwin"
+      else if osName.startsWith("Windows") then "windows"
+      else osName.toLowerCase.replaceAll("[^a-z0-9]+", "-")
+    val arch = osArch match {
+      case "amd64" | "x86_64"  => "amd64"
+      case "aarch64" | "arm64" => "arm64"
+      case other               => other
+    }
+    s"$os-$arch"
+  }
+
+  /** 发行目录内容：可执行文件 + 运行时动态库（native-image 生成的 `lib*.so`），构建中间产物（`*.args` 等）不入包。 */
+  private[sbt] def distEntries(dir: File, binary: File): Seq[File] = {
+    val libs = Option(dir.listFiles()).getOrElse(Array.empty[File]).filter(_.getName.endsWith(".so")).sortBy(_.getName)
+    binary +: libs.toSeq
+  }
+
+  /** 打包为 tar.gz：gzip 在任何目标机上都能用系统 tar 直接解开（CentOS 8 的 tar 1.30 不支持 --zstd）。 */
+  private[sbt] def packageDist(dir: File, entries: Seq[File], out: File): File = {
+    val names = entries.map(e => e.relativeTo(dir).map(_.getPath).getOrElse(e.getName))
+    val command = Seq("tar", "-z", "-cf", out.absolutePath, "-C", dir.absolutePath) ++ names
+    out.delete()
+    val exit = Process(command).!
+    if exit != 0 then throw new MessageOnlyException(s"tar failed with exit code '$exit': ${command.mkString(" ")}")
+    out
+  }
+
+  /** 计算摘要的十六进制表示。 */
+  private[sbt] def digestHex(file: File, algorithm: String): String = {
+    val digest = java.security.MessageDigest.getInstance(algorithm)
+    val in = new java.io.FileInputStream(file)
+    try {
+      val buf = new Array[Byte](64 * 1024)
+      var n = in.read(buf)
+      while n >= 0 do
+        digest.update(buf, 0, n)
+        n = in.read(buf)
+    } finally in.close()
+    digest.digest().map(b => f"$b%02x").mkString
+  }
+
+  /** 生成 sha256sum 兼容的校验文件（`<hash>  <file>`）。 */
+  private[sbt] def writeChecksum(file: File): File = {
+    val out = new File(file.getAbsolutePath + ".sha256")
+    IO.write(out, s"${digestHex(file, "SHA-256")}  ${file.getName}\n")
+    out
+  }
+
+  /** 生成 maven 风格的 `.sha1`（内容只有 40 位十六进制摘要）。 */
+  private[sbt] def writeSha1(file: File): File = {
+    val out = new File(file.getAbsolutePath + ".sha1")
+    IO.write(out, digestHex(file, "SHA-1"))
+    out
+  }
+
+  /** 按 maven 本地仓库布局安装工件：`<repo>/<group>/<artifactId>/<version>/`，附带 pom 和 `.sha1`。 */
+  private[sbt] def installToMavenLocal(
+      repo: File,
+      groupId: String,
+      artifactId: String,
+      version: String,
+      artifact: File,
+      pom: File): Seq[File] = {
+    val dir = repo / groupId.replace('.', '/') / artifactId / version
+    IO.createDirectory(dir)
+    val installed = dir / artifact.getName
+    IO.copyFile(artifact, installed)
+    val installedPom = dir / s"$artifactId-$version.pom"
+    IO.copyFile(pom, installedPom)
+    Seq(installed, writeSha1(installed), installedPom, writeSha1(installedPom))
+  }
 
   /** 解析符号链接得到物理路径；路径不可解析时保持原样。 */
   private def realPath(p: Path): Path =
