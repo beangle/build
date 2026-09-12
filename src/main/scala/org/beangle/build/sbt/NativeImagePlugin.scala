@@ -4,9 +4,14 @@ import sbt.*
 import sbt.Keys.*
 import sbt.plugins.JvmPlugin
 import xsbti.FileConverter
-import java.io.File
+import org.beangle.build.boot.Dependency
+import org.beangle.build.util.{Bsdiff, IOs, Strings}
+
+import java.io.{BufferedInputStream, BufferedOutputStream, File, FileInputStream, FileOutputStream}
+import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
+import java.util.zip.GZIPInputStream
 import scala.sys.process.Process
 import scala.util.Properties
 
@@ -25,7 +30,7 @@ import scala.util.Properties
   * 初始化器/静态资源重复注册），这里直接 fail，而不是留到运行期去容错。
   */
 object NativeImagePlugin extends sbt.AutoPlugin {
-  override def requires = JvmPlugin
+  override def requires = JvmPlugin && SnapshotPlugin
   override def trigger = noTrigger
 
   object autoImport {
@@ -46,6 +51,14 @@ object NativeImagePlugin extends sbt.AutoPlugin {
       "Local maven repository that nativeDistInstall writes to (default ~/.m2/repository).")
     val nativeDistInstall: TaskKey[Seq[File]] = taskKey[Seq[File]](
       "Install the native distribution and its pom into the local maven repository.")
+    val nativeDistDeltaBase: SettingKey[Option[String]] = settingKey[Option[String]](
+      "Base version of nativeDistDelta, defaults to the greatest git tag lower than the current version.")
+    val nativeDistDelta: TaskKey[File] = taskKey[File](
+      "Generate a bsdiff patch between the previous native distribution and the current one.")
+    val nativeDeltaRepoUrl: SettingKey[String] = settingKey[String](
+      "Repository url for uploading the native distribution checksum and delta.")
+    val nativeDeltaUpload: TaskKey[Unit] = taskKey[Unit](
+      "Upload the native distribution sha1 and delta to the delta repository.")
   }
 
   import autoImport.*
@@ -92,6 +105,60 @@ object NativeImagePlugin extends sbt.AutoPlugin {
         conv.toPath(makePom.value).toFile)
       streams.value.log.info(s"installed native distribution: ${installed.head.absolutePath}")
       installed
+    },
+    nativeDistDeltaBase := None,
+    nativeDistDelta := Def.uncached {
+      val log = streams.value.log
+      val m2Root = nativeDistLocalRepo.value.getAbsolutePath
+      val base = nativeDistDeltaBase.value.getOrElse(
+        previousVersion(gitTags(baseDirectory.value), version.value).getOrElse(
+          throw new MessageOnlyException(
+            s"cannot find a git tag lower than ${version.value}, set nativeDistDeltaBase explicitly.")))
+      val packaging = s"-${nativeDistClassifier.value}.tar.gz"
+      val oldArtifact = new File(Dependency.m2Path(m2Root, organization.value, name.value, base, packaging))
+      if (!oldArtifact.exists) then
+        throw new MessageOnlyException(
+          s"cannot find ${oldArtifact.getAbsolutePath}, run nativeDistInstall on $base or put that distribution into the local repository.")
+      val current = nativeDist.value
+      val patch = new File(Dependency.m2DiffPath(m2Root, organization.value, name.value, base, version.value, packaging))
+      IO.createDirectory(patch.getParentFile)
+      log.info(s"generating delta $base -> ${version.value}: ${patch.getName}")
+      val heapMb = java.lang.Runtime.getRuntime.maxMemory / (1024 * 1024)
+      if heapMb < 3000 then
+        log.warn(s"bsdiff on ${oldArtifact.length / 1024 / 1024}MB files needs about 3GB heap, but max heap is ${heapMb}MB, restart sbt with -J-Xmx4G.")
+      // 压缩流之间做 diff 出的补丁几乎等于整包，所以先解压成 tar 再比对。
+      IO.withTemporaryDirectory { dir =>
+        Bsdiff.diff(gunzip(oldArtifact, dir / "old.tar"), gunzip(current, dir / "new.tar"), patch)
+      }
+      writeSha1(patch)
+      val out = current.getParentFile / patch.getName
+      IO.copyFile(patch, out)
+      log.info(s"generated ${out.absolutePath}(${out.length / 1000.0}KB)")
+      out
+    },
+    nativeDeltaRepoUrl := "unknown-url",
+    nativeDeltaUpload := Def.uncached {
+      val log = streams.value.log
+      val url = nativeDeltaRepoUrl.value
+      val patch = nativeDistDelta.value
+      val credentials = SnapshotPlugin.autoImport.snapshotCredentials.value
+      if (url == "unknown-url") {
+        log.error("set nativeDeltaRepoUrl := http://server/path/to/upload/{fileName} first.")
+      } else {
+        SnapshotPlugin.readCredentials(credentials) match {
+          case Some((user, password)) =>
+            val files = Seq(new File(nativeDist.value.getAbsolutePath + ".sha1"), patch, new File(patch.getAbsolutePath + ".sha1"))
+            files.filter(_.exists).foreach { file =>
+              val uploadUrl = Strings.replace(url, "{fileName}", file.getName)
+              log.info(s"Uploading to $uploadUrl")
+              val rs = SnapshotPlugin.upload(URI.create(uploadUrl).toURL, file, user, password)
+              if (rs._1 == 200) log.info(s"Upload ${file.getName} success")
+              else log.error(s"Upload ${file.getName} failed for status is ${rs._1} and reason is ${rs._2}")
+            }
+          case None =>
+            log.error(s"Native delta upload is aborted: cannot find user or password in credentials file $credentials")
+        }
+      }
     },
     nativeImage := Def.uncached {
       val _ = (Compile / products).value
@@ -196,6 +263,47 @@ object NativeImagePlugin extends sbt.AutoPlugin {
     val installedPom = dir / s"$artifactId-$version.pom"
     IO.copyFile(pom, installedPom)
     Seq(installed, writeSha1(installed), installedPom, writeSha1(installedPom))
+  }
+
+  /** 读取仓库中的版本 tag（按版本降序，git 自身排序）。 */
+  private[sbt] def gitTags(dir: File): Seq[String] =
+    try
+      Process(Seq("git", "tag", "--sort=-v:refname"), cwd = Some(dir)).!!
+        .linesIterator.map(_.trim).filter(_.nonEmpty).toSeq
+    catch case _: Exception => Nil
+
+  /** 取小于当前版本的最大 tag 版本；tag 列表需按版本降序。 */
+  private[sbt] def previousVersion(tags: Seq[String], current: String): Option[String] = {
+    val version = current.stripSuffix("-SNAPSHOT")
+    tags.map(_.stripPrefix("v")).filter(_.headOption.exists(_.isDigit)).find(compareVersion(_, version) < 0)
+  }
+
+  /** 版本比较：按 `.`/`-` 切段，能转数字的按数字比，否则按字符串比。 */
+  private[sbt] def compareVersion(left: String, right: String): Int = {
+    val ls = left.split("[.-]")
+    val rs = right.split("[.-]")
+    var result = 0
+    var i = 0
+    while result == 0 && i < math.max(ls.length, rs.length) do
+      val l = if i < ls.length then ls(i) else "0"
+      val r = if i < rs.length then rs(i) else "0"
+      result = (l.toIntOption, r.toIntOption) match {
+        case (Some(x), Some(y)) => x.compare(y)
+        case _                  => l.compareTo(r)
+      }
+      i += 1
+    result
+  }
+
+  /** 解压 gzip 到目标文件。 */
+  private[sbt] def gunzip(source: File, target: File): File = {
+    val in = new GZIPInputStream(new BufferedInputStream(new FileInputStream(source)))
+    try
+      val out = new BufferedOutputStream(new FileOutputStream(target))
+      try IOs.copy(in, out)
+      finally out.close()
+    finally in.close()
+    target
   }
 
   /** 解析符号链接得到物理路径；路径不可解析时保持原样。 */

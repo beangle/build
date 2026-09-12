@@ -127,7 +127,7 @@ object SnapshotPlugin extends sbt.AutoPlugin {
     }
   }
 
-  private def readCredentials(file: File): Option[(String, String)] = {
+  private[sbt] def readCredentials(file: File): Option[(String, String)] = {
     if (null == file || !file.exists()) None
     else {
       val properties = new java.util.Properties
@@ -157,7 +157,7 @@ object SnapshotPlugin extends sbt.AutoPlugin {
     md.digest().map(b => "%02x".format(b & 0xff)).mkString
   }
 
-  private def upload(url: URL, file: File, user: String, password: String): (Int, Any) = {
+  private[sbt] def upload(url: URL, file: File, user: String, password: String): (Int, Any) = {
     val conn = url.openConnection.asInstanceOf[HttpURLConnection]
     Https.noverify(conn)
     conn.setUseCaches(false)
