@@ -78,10 +78,15 @@ object WarPlugin extends AutoPlugin {
     }
 
   override def projectSettings: Seq[Setting[?]] = {
-    Defaults.packageTaskSettings(pkg, warPrepare) ++
-      Seq(pkg / artifact := Artifact(moduleName.value, "war", "war")) ++
-      addArtifact(Compile / pkg / artifact, pkg) ++
-      Seq(pkg / packageOptions := (pkg / packageOptions).value ++ manifestOptions.value) ++
+    // sbt 2 中 `Keys.package` 与 `Keys.packageBin` 已是两个键，且 `Compile / package`
+    // 默认取 `Compile / packageBin`（jar）。war 打包必须落在 Compile 作用域，
+    // 否则 `Compile / package` 依旧产出 jar，快照上传会拿到 jar 的内容。
+    ProjectExtra.inConfig(Compile)(
+      Defaults.packageTaskSettings(pkg, warPrepare) ++
+        Seq(pkg / artifact := Artifact(moduleName.value, "war", "war")) ++
+        Seq(pkg / packageOptions := (pkg / packageOptions).value ++ manifestOptions.value)
+    ) ++
+      addArtifact(Compile / pkg / artifact, Compile / pkg) ++
       Seq(
         Compile / packageBin / publishArtifact := false,
         (warPrepare / sourceDirectory) := (Compile / sourceDirectory).value / "webapp",
