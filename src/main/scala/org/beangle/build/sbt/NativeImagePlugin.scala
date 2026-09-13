@@ -4,8 +4,8 @@ import sbt.*
 import sbt.Keys.*
 import sbt.plugins.JvmPlugin
 import xsbti.FileConverter
-import org.beangle.build.boot.Dependency
 import org.beangle.build.util.{Bsdiff, IOs, Strings}
+import org.beangle.build.util.BsdiffMain
 
 import java.io.{BufferedInputStream, BufferedOutputStream, File, FileInputStream, FileOutputStream}
 import java.net.URI
@@ -14,6 +14,9 @@ import java.nio.file.{Files, Path, Paths}
 import java.util.zip.GZIPInputStream
 import scala.sys.process.Process
 import scala.util.Properties
+
+/** [[NativeImagePlugin.nativeDist]] 的产物：发行包归档，以及能找到上一版本时生成的增量补丁。 */
+final case class NativeDist(archive: File, delta: Option[File])
 
 /** Minimal GraalVM native-image launcher for sbt 2.
   *
@@ -43,20 +46,22 @@ object NativeImagePlugin extends sbt.AutoPlugin {
       "Extra arguments passed to the native-image optimizer.")
     @transient val nativeImageOutput: TaskKey[xsbti.VirtualFileRef] = taskKey[xsbti.VirtualFileRef](
       "The binary produced by native-image.")
-    val nativeDist: TaskKey[File] = taskKey[File](
-      "Package the native image (binary + runtime libraries) into a distributable archive.")
+    val nativeDist: TaskKey[NativeDist] = taskKey[NativeDist](
+      "Package the native image, install it into the local native repository and generate the delta from the previous version.")
     val nativeDistClassifier: SettingKey[String] = settingKey[String](
       "Platform classifier used in the nativeDist file name.")
-    val nativeDistLocalRepo: SettingKey[File] = settingKey[File](
-      "Local maven repository that nativeDistInstall writes to (default ~/.m2/repository).")
-    val nativeDistInstall: TaskKey[Seq[File]] = taskKey[Seq[File]](
-      "Install the native distribution and its pom into the local maven repository.")
+    val nativeRepoHome: SettingKey[File] = settingKey[File](
+      "Local maven home used as the native repository (default ~/.m2): releases install into <home>/repository, snapshots into <home>/snapshots.")
+    val nativeRepoPath: SettingKey[String] = settingKey[String](
+      "Repository relative path of this project, used as the {path} of nativeDeltaRepoUrl.")
     val nativeDistDeltaBase: SettingKey[Option[String]] = settingKey[Option[String]](
-      "Base version of nativeDistDelta, defaults to the greatest git tag lower than the current version.")
-    val nativeDistDelta: TaskKey[File] = taskKey[File](
-      "Generate a bsdiff patch between the previous native distribution and the current one.")
-    val nativeDeltaRepoUrl: SettingKey[String] = settingKey[String](
-      "Repository url for uploading the native distribution checksum and delta.")
+      "Base version of the delta, defaults to the greatest git tag lower than the current version.")
+    val nativeDistDeltaHeap: SettingKey[String] = settingKey[String](
+      "Heap of the forked bsdiff JVM, e.g. 4g. Unlike the sbt JVM it can be sized for the diff alone.")
+    val nativePublishUrl: SettingKey[String] = settingKey[String](
+      "Native repository url for publishing, e.g. https://host/sas/repo/native/upload/{path}/{fileName}.")
+    val nativeDistUpload: TaskKey[Unit] = taskKey[Unit](
+      "Upload the native distribution and its checksums to the native repository.")
     val nativeDeltaUpload: TaskKey[Unit] = taskKey[Unit](
       "Upload the native distribution sha1 and delta to the delta repository.")
   }
@@ -79,85 +84,105 @@ object NativeImagePlugin extends sbt.AutoPlugin {
       xsbti.VirtualFileRef.of(out.absolutePath)
     },
     nativeDistClassifier := platformClassifier(System.getProperty("os.name"), System.getProperty("os.arch")),
-    nativeDistLocalRepo := sbt.Path.userHome / ".m2" / "repository",
+    nativeRepoHome := sbt.Path.userHome / ".m2",
+    nativeRepoPath := repositoryPath(organization.value, name.value, version.value),
+    nativeDistDeltaBase := None,
+    nativeDistDeltaHeap := "4g",
     nativeDist := Def.uncached {
       implicit val conv: FileConverter = fileConverter.value
+      val log = streams.value.log
+      val home = nativeRepoHome.value
+      val root = repositoryRoot(home, version.value)
+      // 增量基准只可能是正式版本(快照版不作为基准)，因此去 repository 根目录里找。
+      val released = releaseRoot(home)
+      val classifier = nativeDistClassifier.value
       // 触发链接并拿到可执行文件的真实路径（CAS 下是符号链接）
       val binary = conv.toPath(nativeImage.value).toFile
       val dir = binary.getParentFile
-      val out = dir.getParentFile / s"${name.value}-${version.value}-${nativeDistClassifier.value}.tar.gz"
-      packageDist(dir, distEntries(dir, binary), out)
-      writeChecksum(out)
-      writeSha1(out)
-      streams.value.log.info(s"native distribution: ${out.absolutePath}")
-      streams.value.log.info(s"native distribution sha1: ${digestHex(out, "SHA-1")}")
-      out
-    },
-    nativeDistInstall := Def.uncached {
-      implicit val conv: FileConverter = fileConverter.value
-      val artifact = nativeDist.value
-      val installed = installToMavenLocal(
-        nativeDistLocalRepo.value,
-        organization.value,
-        name.value,
-        version.value,
-        artifact,
-        conv.toPath(makePom.value).toFile)
-      streams.value.log.info(s"installed native distribution: ${installed.head.absolutePath}")
-      installed
-    },
-    nativeDistDeltaBase := None,
-    nativeDistDelta := Def.uncached {
-      val log = streams.value.log
-      val m2Root = nativeDistLocalRepo.value.getAbsolutePath
-      val base = nativeDistDeltaBase.value.getOrElse(
-        previousVersion(gitTags(baseDirectory.value), version.value).getOrElse(
-          throw new MessageOnlyException(
-            s"cannot find a git tag lower than ${version.value}, set nativeDistDeltaBase explicitly.")))
-      val packaging = s"-${nativeDistClassifier.value}.tar.gz"
-      val oldArtifact = new File(Dependency.m2Path(m2Root, organization.value, name.value, base, packaging))
-      if (!oldArtifact.exists) then
-        throw new MessageOnlyException(
-          s"cannot find ${oldArtifact.getAbsolutePath}, run nativeDistInstall on $base or put that distribution into the local repository.")
-      val current = nativeDist.value
-      val patch = new File(Dependency.m2DiffPath(m2Root, organization.value, name.value, base, version.value, packaging))
-      IO.createDirectory(patch.getParentFile)
-      log.info(s"generating delta $base -> ${version.value}: ${patch.getName}")
-      val heapMb = java.lang.Runtime.getRuntime.maxMemory / (1024 * 1024)
-      if heapMb < 3000 then
-        log.warn(s"bsdiff on ${oldArtifact.length / 1024 / 1024}MB files needs about 3GB heap, but max heap is ${heapMb}MB, restart sbt with -J-Xmx4G.")
-      // 压缩流之间做 diff 出的补丁几乎等于整包，所以先解压成 tar 再比对。
-      IO.withTemporaryDirectory { dir =>
-        Bsdiff.diff(gunzip(oldArtifact, dir / "old.tar"), gunzip(current, dir / "new.tar"), patch)
+      val archive = dir.getParentFile / distFileName(name.value, version.value, classifier)
+      packageDist(dir, distEntries(dir, binary), archive)
+      writeChecksum(archive)
+      writeSha1(archive)
+      log.info(s"native distribution: ${archive.absolutePath}")
+      log.info(s"native distribution sha1: ${digestHex(archive, "SHA-1")}")
+      val installed = installDist(root, organization.value, name.value, version.value, archive)
+      log.info(s"installed native distribution: ${installed.head.absolutePath}")
+
+      // 增量补丁：本地仓库里没有更低的版本（或没有该版本的发行包）就跳过，构建照常成功。
+      val base = nativeDistDeltaBase.value
+        .orElse(previousLocalVersion(released, organization.value, name.value, version.value, classifier))
+      val oldArtifact = base.map { b =>
+        repositoryDir(repositoryRoot(home, b), organization.value, name.value, b) / distFileName(name.value, b, classifier)
       }
-      writeSha1(patch)
-      val out = current.getParentFile / patch.getName
-      IO.copyFile(patch, out)
-      log.info(s"generated ${out.absolutePath}(${out.length / 1000.0}KB)")
-      out
+      val delta = oldArtifact match {
+        case Some(old) if old.exists() =>
+          // 快照包会反复构建，补丁名里带上构建时间；正式包只有一份，沿用 maven 风格的 diff 名。
+          val buildNumber = if (version.value.contains("SNAPSHOT")) Some(SnapshotPlugin.timestampBuildNumber()) else None
+          val patch = repositoryDir(root, organization.value, name.value, version.value) /
+            deltaName(name.value, base.get, version.value, buildNumber, classifier)
+          IO.createDirectory(patch.getParentFile)
+          log.info(s"generating delta ${base.get} -> ${version.value}${buildNumber.map("-" + _).getOrElse("")}: ${patch.getName}")
+          // 压缩流之间做 diff 出的补丁几乎等于整包，所以先解压成 tar 再比对；
+          // bsdiff 要几 GB 堆，默认丢给子 JVM，免得要求调用者重启 sbt 加堆。
+          IO.withTemporaryDirectory { tmp =>
+            val oldTar = gunzip(old, tmp / "old.tar")
+            val newTar = gunzip(archive, tmp / "new.tar")
+            if !bsdiffInFork(oldTar, newTar, patch, nativeDistDeltaHeap.value) then
+              val heapMb = java.lang.Runtime.getRuntime.maxMemory / (1024 * 1024)
+              log.warn(s"forked bsdiff failed, falling back to the sbt JVM (max heap ${heapMb}MB).")
+              Bsdiff.diff(oldTar, newTar, patch)
+          }
+          // 中断/失败的 diff 会留下空文件，宁可直接失败也不要让它在仓库里冒充补丁。
+          if patch.length() == 0 then
+            patch.delete()
+            throw new MessageOnlyException(s"bsdiff produced no patch for ${patch.getName}")
+          val patchSha1 = writeSha1(patch)
+          val out = archive.getParentFile / patch.getName
+          IO.copyFile(patch, out)
+          IO.copyFile(patchSha1, new File(out.getAbsolutePath + ".sha1"))
+          log.info(s"generated ${out.absolutePath}(${out.length / 1000.0}KB)")
+          Some(out)
+        case _ =>
+          log.info(s"skip native delta: no local distribution older than ${version.value} under ${released.getAbsolutePath}")
+          None
+      }
+      NativeDist(archive, delta)
     },
-    nativeDeltaRepoUrl := "unknown-url",
+    nativePublishUrl := "unknown-url",
+    nativeDistUpload := Def.uncached {
+      val log = streams.value.log
+      val path = nativeRepoPath.value
+      val archive = new File(repositoryRoot(nativeRepoHome.value, version.value),
+        s"$path/${distFileName(name.value, version.value, nativeDistClassifier.value)}")
+      if (!archive.exists()) {
+        log.warn(s"skip native distribution upload: cannot find ${archive.getAbsolutePath}, run nativeDist first.")
+      } else {
+        uploadToRepo(
+          log,
+          SnapshotPlugin.autoImport.snapshotCredentials.value,
+          nativePublishUrl.value,
+          path,
+          distFiles(archive),
+          "native distribution")
+      }
+    },
     nativeDeltaUpload := Def.uncached {
       val log = streams.value.log
-      val url = nativeDeltaRepoUrl.value
-      val patch = nativeDistDelta.value
-      val credentials = SnapshotPlugin.autoImport.snapshotCredentials.value
-      if (url == "unknown-url") {
-        log.error("set nativeDeltaRepoUrl := http://server/path/to/upload/{fileName} first.")
-      } else {
-        SnapshotPlugin.readCredentials(credentials) match {
-          case Some((user, password)) =>
-            val files = Seq(new File(nativeDist.value.getAbsolutePath + ".sha1"), patch, new File(patch.getAbsolutePath + ".sha1"))
-            files.filter(_.exists).foreach { file =>
-              val uploadUrl = Strings.replace(url, "{fileName}", file.getName)
-              log.info(s"Uploading to $uploadUrl")
-              val rs = SnapshotPlugin.upload(URI.create(uploadUrl).toURL, file, user, password)
-              if (rs._1 == 200) log.info(s"Upload ${file.getName} success")
-              else log.error(s"Upload ${file.getName} failed for status is ${rs._1} and reason is ${rs._2}")
-            }
-          case None =>
-            log.error(s"Native delta upload is aborted: cannot find user or password in credentials file $credentials")
-        }
+      val path = nativeRepoPath.value
+      val dir = new File(repositoryRoot(nativeRepoHome.value, version.value), path)
+      findLatestDelta(dir, name.value, version.value, nativeDistClassifier.value) match {
+        case None =>
+          log.warn(s"skip native delta upload: cannot find any delta in ${dir.getAbsolutePath}, run nativeDist first.")
+        case Some(delta) =>
+          val archiveSha1 = new File(dir, distFileName(name.value, version.value, nativeDistClassifier.value) + ".sha1")
+          val files = Seq(archiveSha1, delta, new File(delta.getAbsolutePath + ".sha1")).filter(_.exists)
+          uploadToRepo(
+            log,
+            SnapshotPlugin.autoImport.snapshotCredentials.value,
+            nativePublishUrl.value,
+            path,
+            files,
+            "native delta")
       }
     },
     nativeImage := Def.uncached {
@@ -248,35 +273,180 @@ object NativeImagePlugin extends sbt.AutoPlugin {
     out
   }
 
-  /** 按 maven 本地仓库布局安装工件：`<repo>/<group>/<artifactId>/<version>/`，附带 pom 和 `.sha1`。 */
-  private[sbt] def installToMavenLocal(
-      repo: File,
+  /** 正式版本的仓库根：`<home>/repository`。 */
+  private[sbt] def releaseRoot(home: File): File = home / "repository"
+
+  /** 开发版(快照)的仓库根：`<home>/snapshots`。 */
+  private[sbt] def snapshotRoot(home: File): File = home / "snapshots"
+
+  /** 版本对应的仓库根：正式版进 `<home>/repository`，`-SNAPSHOT` 进 `<home>/snapshots`。 */
+  private[sbt] def repositoryRoot(home: File, version: String): File =
+    if version.contains("SNAPSHOT") then snapshotRoot(home) else releaseRoot(home)
+
+  /** 仓库内的相对路径：`<group 转路径>/<artifactId>/<version>`。 */
+  private[sbt] def repositoryPath(groupId: String, artifactId: String, version: String): String =
+    s"${groupId.replace('.', '/')}/$artifactId/$version"
+
+  /** 用子 JVM 跑 bsdiff，堆由 `nativeDistDeltaHeap` 指定；启动失败返回 false。
+    *
+    * 子 JVM 的 classpath 由几个代表类的 code source 拼出：本插件的类、commons-compress（Bzip2 流），
+    * 以及 Scala 运行库（本插件是 Scala 3 编译的，`Predef` 在 scala3-library、集合类在 scala-library）。
+    */
+  private[sbt] def bsdiffInFork(old: File, newFile: File, patch: File, heap: String): Boolean = {
+    val classpath = Seq[Class[?]](BsdiffMain.getClass,
+      classOf[org.apache.commons.compress.compressors.CompressorStreamFactory],
+      scala.Predef.getClass,
+      classOf[scala.collection.immutable.Seq[?]]).flatMap(codeSource)
+      .map(_.getAbsolutePath).distinct
+    if classpath.isEmpty then
+      false
+    else
+      val java = s"${System.getProperty("java.home")}/bin/java"
+      val command = Seq(java, s"-Xmx$heap", "-cp", classpath.mkString(File.pathSeparator),
+        "org.beangle.build.util.BsdiffMain", old.getAbsolutePath, newFile.getAbsolutePath, patch.getAbsolutePath)
+      Process(command).! == 0 && patch.exists() && patch.length() > 0
+  }
+
+  /** 类所在的 jar 或 classes 目录，用来拼子 JVM 的 classpath。 */
+  private def codeSource(clazz: Class[?]): Option[File] = {
+    Option(clazz.getProtectionDomain).flatMap(pd => Option(pd.getCodeSource)).flatMap(cs => Option(cs.getLocation))
+      .map(url => try new File(url.toURI) catch case _: Exception => new File(url.getPath))
+  }
+
+  /** 发行包及其校验文件：归档、maven 风格的 `.sha1`、`sha256sum` 风格的 `.sha256`。 */
+  private[sbt] def distFiles(dist: File): Seq[File] =
+    Seq(dist, new File(dist.getAbsolutePath + ".sha1"), new File(dist.getAbsolutePath + ".sha256"))
+      .filter(_.exists)
+
+  /** 发行包文件名：`<name>-<version>-<classifier>.tar.gz`。 */
+  private[sbt] def distFileName(artifactId: String, version: String, classifier: String): String =
+    s"$artifactId-$version-$classifier.tar.gz"
+
+  /** 版本目录里最新的增量补丁：`<name>-<基准版本>_<版本>[-<UTC 构建号>]-<classifier>.tar.gz.diff`。 */
+  private[sbt] def findLatestDelta(dir: File, artifactId: String, version: String, classifier: String): Option[File] = {
+    val marker = s"_$version"
+    val suffix = s"-$classifier.tar.gz.diff"
+    val children = Option(dir.list()).getOrElse(Array.empty[String])
+    val candidates = children.filter { c =>
+      c.startsWith(s"$artifactId-") && c.contains(marker) && c.endsWith(suffix) && new File(dir, c).length() > 0
+    }
+    if (candidates.isEmpty) None
+    else Some(new File(dir, candidates.maxBy(c => deltaBuildNumber(c, marker, suffix))))
+  }
+
+  /** 从补丁名里取构建号：`..._<版本>-20260913.101500-1-linux-amd64.tar.gz.diff` 取 `-20260913.101500-1`，正式包为空。 */
+  private[sbt] def deltaBuildNumber(fileName: String, versionMarker: String, suffix: String): String = {
+    val start = fileName.indexOf(versionMarker) + versionMarker.length
+    val end = fileName.length - suffix.length
+    if (start >= versionMarker.length && end > start) fileName.substring(start, end) else ""
+  }
+
+  /** 用仓库内相对路径和文件名填充地址模板里的 `{path}` / `{fileName}`。 */
+  private[sbt] def fill(url: String, path: String, fileName: String): String =
+    Strings.replace(Strings.replace(url, "{path}", path), "{fileName}", fileName)
+
+  /** 从发布地址推下载地址：去掉 `/upload` 一段（只为日志方便，未包含时返回原样）。 */
+  private[sbt] def downloadUrl(publishUrl: String, path: String, fileName: String): String =
+    fill(publishUrl.replace("/upload", ""), path, fileName)
+
+  /** 上传文件到 native 仓库，`publishUrl` 是含 `{path}`/`{fileName}` 占位符的发布地址。 */
+  private def uploadToRepo(
+      log: sbt.util.Logger,
+      credentials: File,
+      publishUrl: String,
+      path: String,
+      files: Seq[File],
+      label: String): Unit = {
+    if (publishUrl == "unknown-url") {
+      log.error("set nativePublishUrl := https://host/sas/repo/native/upload/{path}/{fileName} first.")
+    } else if (files.isEmpty) {
+      log.error(s"no $label to upload")
+    } else {
+      SnapshotPlugin.readCredentials(credentials) match {
+        case Some((user, password)) =>
+          files.foreach { file =>
+            val url = fill(publishUrl, path, file.getName)
+            log.info(s"Uploading to $url")
+            val rs = SnapshotPlugin.upload(URI.create(url).toURL, file, user, password)
+            if (rs._1 == 200) {
+              log.info(s"Upload ${file.getName} success, download it from ${downloadUrl(publishUrl, path, file.getName)}")
+            } else {
+              log.error(s"Upload ${file.getName} failed for status is ${rs._1} and reason is ${rs._2}")
+            }
+          }
+        case None =>
+          log.error(s"Native upload is aborted: cannot find user or password in credentials file $credentials")
+      }
+    }
+  }
+
+  /** 仓库内的版本目录：`<root>/<group 转路径>/<artifactId>/<version>`。 */
+  private[sbt] def repositoryDir(root: File, groupId: String, artifactId: String, version: String): File =
+    root / repositoryPath(groupId, artifactId, version)
+
+  /** 增量补丁文件名：`<name>-<基准版本>_<当前版本>[-<UTC 时间戳>-<构建号>]-<classifier>.tar.gz.diff`。
+    *
+    * 快照包同名版本会反复构建，用构建号区分；正式包不传构建号，与 `WarPlugin.warDiff` 命名一致。
+    */
+  private[sbt] def deltaName(
+      artifactId: String,
+      baseVersion: String,
+      version: String,
+      buildNumber: Option[String],
+      classifier: String): String = {
+    val stamp = buildNumber.map(n => s"-$n").getOrElse("")
+    s"$artifactId-${baseVersion}_$version$stamp-$classifier.tar.gz.diff"
+  }
+
+  /** 按仓库布局安装发行包：复制归档并生成 maven 风格的 `.sha1`（只装 tar.gz 一类发行包，不产生 pom）。 */
+  private[sbt] def installDist(
+      root: File,
       groupId: String,
       artifactId: String,
       version: String,
-      artifact: File,
-      pom: File): Seq[File] = {
-    val dir = repo / groupId.replace('.', '/') / artifactId / version
+      artifact: File): Seq[File] = {
+    val dir = repositoryDir(root, groupId, artifactId, version)
     IO.createDirectory(dir)
     val installed = dir / artifact.getName
     IO.copyFile(artifact, installed)
-    val installedPom = dir / s"$artifactId-$version.pom"
-    IO.copyFile(pom, installedPom)
-    Seq(installed, writeSha1(installed), installedPom, writeSha1(installedPom))
+    Seq(installed, writeSha1(installed), writeChecksum(installed))
   }
 
-  /** 读取仓库中的版本 tag（按版本降序，git 自身排序）。 */
-  private[sbt] def gitTags(dir: File): Seq[String] =
-    try
-      Process(Seq("git", "tag", "--sort=-v:refname"), cwd = Some(dir)).!!
-        .linesIterator.map(_.trim).filter(_.nonEmpty).toSeq
-    catch case _: Exception => Nil
-
-  /** 取小于当前版本的最大 tag 版本；tag 列表需按版本降序。 */
-  private[sbt] def previousVersion(tags: Seq[String], current: String): Option[String] = {
-    val version = current.stripSuffix("-SNAPSHOT")
-    tags.map(_.stripPrefix("v")).filter(_.headOption.exists(_.isDigit)).find(compareVersion(_, version) < 0)
+  /** 本地仓库中可作增量基准的版本：正式版本，且该版本目录里确实存有本平台的发行包。
+    *
+    * 快照版本不参与：它多半是本机反复构建的试验产物，未必发布过，拿它当基准对客户端没有意义。
+    */
+  private[sbt] def localVersions(
+      root: File,
+      groupId: String,
+      artifactId: String,
+      classifier: String): Seq[String] = {
+    val parent = root / groupId.replace('.', '/') / artifactId
+    Option(parent.list())
+      .getOrElse(Array.empty[String])
+      .filter(v => isVersionLike(v) && !v.contains("SNAPSHOT"))
+      .filter { v => (new File(parent, s"$v/${distFileName(artifactId, v, classifier)}")).exists() }
+      .toSeq
   }
+
+  /** 取本地仓库中小于当前版本的最大正式版本；一个都没有则返回 None，即快照版本之间不互相作基准。
+    *
+    * 比较用的是 [[compareVersion]]：`4.20.13` 大于 `4.20.9`，因为数字按数字比而不是按目录名字典序。
+    */
+  private[sbt] def previousLocalVersion(
+      root: File,
+      groupId: String,
+      artifactId: String,
+      current: String,
+      classifier: String): Option[String] =
+    localVersions(root, groupId, artifactId, classifier)
+      .filter(compareVersion(_, current) < 0)
+      .sortWith((left, right) => compareVersion(left, right) > 0)
+      .headOption
+
+  /** 目录名是否像版本号：以数字开头，其余只允许数字/字母/点/下划线/连字符。 */
+  private[sbt] def isVersionLike(dirName: String): Boolean =
+    dirName.headOption.exists(_.isDigit) && dirName.matches("[0-9][0-9A-Za-z._-]*")
 
   /** 版本比较：按 `.`/`-` 切段，能转数字的按数字比，否则按字符串比。 */
   private[sbt] def compareVersion(left: String, right: String): Int = {

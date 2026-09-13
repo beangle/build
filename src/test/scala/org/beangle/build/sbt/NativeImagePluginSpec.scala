@@ -19,6 +19,7 @@ package org.beangle.build.sbt
 
 import org.scalatest.funspec.AnyFunSpec
 import org.scalatest.matchers.should.Matchers
+import org.beangle.build.util.Bsdiff
 import sbt.MessageOnlyException
 
 import java.io.File
@@ -122,24 +123,208 @@ class NativeImagePluginSpec extends AnyFunSpec with Matchers {
     }
   }
 
-  describe("installToMavenLocal") {
-    it("installs artifact and pom with sha1 into the maven repository layout") {
+  describe("installDist") {
+    it("installs artifact with its checksums into the native repository layout") {
       val work = Files.createTempDirectory("native-image").toFile
-      val repo = new File(work, "repository")
+      val repo = NativeImagePlugin.snapshotRoot(new File(work, ".m2"))
       val artifact = write(new File(work, "beangle-ems-portal-4.20.14-SNAPSHOT-linux-amd64.tar.zst"), "payload")
-      val pom = write(new File(work, "beangle-ems-portal-4.20.14-SNAPSHOT.pom"), "<project/>")
 
-      val installed = NativeImagePlugin.installToMavenLocal(
-        repo, "org.beangle.ems", "beangle-ems-portal", "4.20.14-SNAPSHOT", artifact, pom)
+      val installed = NativeImagePlugin.installDist(
+        repo, "org.beangle.ems", "beangle-ems-portal", "4.20.14-SNAPSHOT", artifact)
 
       val dir = new File(repo, "org/beangle/ems/beangle-ems-portal/4.20.14-SNAPSHOT")
       installed shouldBe Seq(
         new File(dir, "beangle-ems-portal-4.20.14-SNAPSHOT-linux-amd64.tar.zst"),
         new File(dir, "beangle-ems-portal-4.20.14-SNAPSHOT-linux-amd64.tar.zst.sha1"),
-        new File(dir, "beangle-ems-portal-4.20.14-SNAPSHOT.pom"),
-        new File(dir, "beangle-ems-portal-4.20.14-SNAPSHOT.pom.sha1"))
+        new File(dir, "beangle-ems-portal-4.20.14-SNAPSHOT-linux-amd64.tar.zst.sha256"))
       installed.foreach(_.exists shouldBe true)
-      new String(Files.readAllBytes(new File(dir, "beangle-ems-portal-4.20.14-SNAPSHOT.pom").toPath), StandardCharsets.UTF_8) shouldBe "<project/>"
+    }
+  }
+
+  describe("repository roots") {
+    it("installs releases under <home>/repository and snapshots under <home>/snapshots") {
+      val home = new File("/tmp/home/.m2")
+      NativeImagePlugin.releaseRoot(home) shouldBe new File(home, "repository")
+      NativeImagePlugin.snapshotRoot(home) shouldBe new File(home, "snapshots")
+      NativeImagePlugin.repositoryRoot(home, "4.20.14") shouldBe NativeImagePlugin.releaseRoot(home)
+      NativeImagePlugin.repositoryRoot(home, "4.20.14-SNAPSHOT") shouldBe NativeImagePlugin.snapshotRoot(home)
+    }
+  }
+
+  describe("repositoryPath") {
+    it("converts group id dots to path separators") {
+      NativeImagePlugin.repositoryPath("org.beangle.ems", "beangle-ems-portal", "4.20.14-SNAPSHOT") shouldBe
+        "org/beangle/ems/beangle-ems-portal/4.20.14-SNAPSHOT"
+    }
+  }
+
+  describe("previousLocalVersion") {
+    it("picks the greatest released local version lower than the current one, comparing numbers as numbers") {
+      val root = Files.createTempDirectory("native-repo").toFile
+      val versions = Seq("4.20.9", "4.20.13")
+      versions.foreach { v =>
+        val dir = new File(root, s"org/beangle/ems/beangle-ems-portal/$v")
+        dir.mkdirs()
+        write(new File(dir, s"beangle-ems-portal-$v-linux-amd64.tar.gz"), v)
+      }
+      val snapshot = new File(root, "org/beangle/ems/beangle-ems-portal/4.20.14-SNAPSHOT")
+      snapshot.mkdirs()
+      write(new File(snapshot, "beangle-ems-portal-4.20.14-SNAPSHOT-linux-amd64.tar.gz"), "snapshot")
+
+      NativeImagePlugin.localVersions(root, "org.beangle.ems", "beangle-ems-portal", "linux-amd64").toSet shouldBe
+        versions.toSet
+      NativeImagePlugin.previousLocalVersion(
+        root, "org.beangle.ems", "beangle-ems-portal", "4.20.14-SNAPSHOT", "linux-amd64") shouldBe Some("4.20.13")
+      NativeImagePlugin.previousLocalVersion(
+        root, "org.beangle.ems", "beangle-ems-portal", "4.20.16", "linux-amd64") shouldBe Some("4.20.13")
+      NativeImagePlugin.previousLocalVersion(
+        root, "org.beangle.ems", "beangle-ems-portal", "4.20.9", "linux-amd64") shouldBe None
+    }
+
+    it("ignores snapshot versions, even when they are the only ones lower than the current version") {
+      val root = Files.createTempDirectory("native-repo").toFile
+      Seq("4.20.13", "4.20.14-SNAPSHOT", "4.20.15-SNAPSHOT").foreach { v =>
+        val dir = new File(root, s"org/beangle/ems/beangle-ems-portal/$v")
+        dir.mkdirs()
+        write(new File(dir, s"beangle-ems-portal-$v-linux-amd64.tar.gz"), v)
+      }
+
+      NativeImagePlugin.localVersions(root, "org.beangle.ems", "beangle-ems-portal", "linux-amd64") shouldBe Seq("4.20.13")
+      NativeImagePlugin.previousLocalVersion(
+        root, "org.beangle.ems", "beangle-ems-portal", "4.20.14", "linux-amd64") shouldBe Some("4.20.13")
+      NativeImagePlugin.previousLocalVersion(
+        root, "org.beangle.ems", "beangle-ems-portal", "4.20.16-SNAPSHOT", "linux-amd64") shouldBe Some("4.20.13")
+    }
+
+    it("returns None when only snapshot versions are present") {
+      val root = Files.createTempDirectory("native-repo").toFile
+      val dir = new File(root, "org/beangle/ems/beangle-ems-portal/4.20.14-SNAPSHOT")
+      dir.mkdirs()
+      write(new File(dir, "beangle-ems-portal-4.20.14-SNAPSHOT-linux-amd64.tar.gz"), "snapshot")
+
+      NativeImagePlugin.localVersions(root, "org.beangle.ems", "beangle-ems-portal", "linux-amd64") shouldBe Nil
+      NativeImagePlugin.previousLocalVersion(
+        root, "org.beangle.ems", "beangle-ems-portal", "4.20.14-SNAPSHOT", "linux-amd64") shouldBe None
+    }
+
+    it("ignores non version directories and versions published without this classifier") {
+      val root = Files.createTempDirectory("native-repo").toFile
+      val parent = new File(root, "org/beangle/ems/beangle-ems-portal")
+      val otherPlatform = new File(parent, "4.20.13")
+      otherPlatform.mkdirs()
+      write(new File(otherPlatform, "beangle-ems-portal-4.20.13-darwin-arm64.tar.gz"), "other platform")
+      val usable = new File(parent, "4.20.12")
+      usable.mkdirs()
+      write(new File(usable, "beangle-ems-portal-4.20.12-linux-amd64.tar.gz"), "usable")
+      new File(parent, "cache").mkdirs()
+      new File(parent, ".attic-20260913").mkdirs()
+
+      NativeImagePlugin.localVersions(root, "org.beangle.ems", "beangle-ems-portal", "linux-amd64") shouldBe Seq("4.20.12")
+      NativeImagePlugin.previousLocalVersion(
+        root, "org.beangle.ems", "beangle-ems-portal", "4.20.14-SNAPSHOT", "linux-amd64") shouldBe Some("4.20.12")
+    }
+
+    it("returns None when the version directory does not exist") {
+      val root = Files.createTempDirectory("native-repo").toFile
+      NativeImagePlugin.previousLocalVersion(
+        root, "org.beangle.ems", "beangle-ems-portal", "4.20.14-SNAPSHOT", "linux-amd64") shouldBe None
+    }
+  }
+
+  describe("bsdiffInFork") {
+    it("runs bsdiff in a child jvm and the patch rebuilds the new file") {
+      val dir = Files.createTempDirectory("bsdiff").toFile
+      val old = write(new File(dir, "old.txt"), "hello world\n" * 500)
+      val current = write(new File(dir, "new.txt"), "hello beangle\n" * 500)
+      val patch = new File(dir, "old-new.diff")
+
+      NativeImagePlugin.bsdiffInFork(old, current, patch, "512m") shouldBe true
+      patch.length() should be > 0L
+
+      val rebuilt = new File(dir, "rebuilt.txt")
+      Bsdiff.patch(old, rebuilt, patch)
+      Files.readAllBytes(rebuilt.toPath) shouldBe Files.readAllBytes(current.toPath)
+    }
+
+    it("reports false instead of throwing when the child jvm fails") {
+      val dir = Files.createTempDirectory("bsdiff").toFile
+      val missing = new File(dir, "missing.txt")
+      NativeImagePlugin.bsdiffInFork(missing, missing, new File(dir, "x.diff"), "512m") shouldBe false
+    }
+  }
+
+  describe("deltaName") {
+    it("stamps the current snapshot version with its utc build number") {
+      NativeImagePlugin.deltaName(
+        "beangle-ems-portal", "4.20.13", "4.20.14-SNAPSHOT", Some("20260913.101500-1"), "linux-amd64") shouldBe
+        "beangle-ems-portal-4.20.13_4.20.14-SNAPSHOT-20260913.101500-1-linux-amd64.tar.gz.diff"
+    }
+
+    it("keeps the maven style name for a released version") {
+      NativeImagePlugin.deltaName(
+        "beangle-ems-portal", "4.20.13", "4.20.14", None, "linux-amd64") shouldBe
+        "beangle-ems-portal-4.20.13_4.20.14-linux-amd64.tar.gz.diff"
+    }
+  }
+
+  describe("repository urls") {
+    it("fills the publish url template and derives the download url") {
+      val path = "org/beangle/ems/beangle-ems-portal/4.20.14-SNAPSHOT"
+      val file = "beangle-ems-portal-4.20.14-SNAPSHOT-linux-amd64.tar.gz"
+      val publishUrl = "https://sas.openurp.net/sas/repo/native/upload/{path}/{fileName}"
+      NativeImagePlugin.fill(publishUrl, path, file) shouldBe
+        s"https://sas.openurp.net/sas/repo/native/upload/$path/$file"
+      NativeImagePlugin.downloadUrl(publishUrl, path, file) shouldBe
+        s"https://sas.openurp.net/sas/repo/native/$path/$file"
+    }
+  }
+
+  describe("distFiles") {
+    it("collects the archive and the checksums that exist") {
+      val dir = Files.createTempDirectory("native-image").toFile
+      val dist = write(new File(dir, "app-1.0-linux-amd64.tar.gz"), "archive")
+      NativeImagePlugin.writeSha1(dist)
+
+      NativeImagePlugin.distFiles(dist).map(_.getName) shouldBe Seq(
+        "app-1.0-linux-amd64.tar.gz", "app-1.0-linux-amd64.tar.gz.sha1")
+
+      NativeImagePlugin.writeChecksum(dist)
+      NativeImagePlugin.distFiles(dist).map(_.getName) shouldBe Seq(
+        "app-1.0-linux-amd64.tar.gz", "app-1.0-linux-amd64.tar.gz.sha1", "app-1.0-linux-amd64.tar.gz.sha256")
+    }
+  }
+
+  describe("findLatestDelta") {
+    it("picks the delta with the greatest utc build number") {
+      val dir = Files.createTempDirectory("native-repo").toFile
+      val older = write(new File(dir, "beangle-ems-portal-4.20.13_4.20.14-SNAPSHOT-20260912.174300-1-linux-amd64.tar.gz.diff"), "old")
+      val newer = write(new File(dir, "beangle-ems-portal-4.20.13_4.20.14-SNAPSHOT-20260913.101500-1-linux-amd64.tar.gz.diff"), "new")
+      write(new File(dir, "beangle-ems-portal-4.20.13_4.20.15-SNAPSHOT-20260914.101500-1-linux-amd64.tar.gz.diff"), "other version")
+      write(new File(dir, "beangle-ems-portal-4.20.14-SNAPSHOT-linux-amd64.tar.gz"), "archive")
+
+      NativeImagePlugin.findLatestDelta(dir, "beangle-ems-portal", "4.20.14-SNAPSHOT", "linux-amd64") shouldBe Some(newer)
+      older.exists() shouldBe true
+    }
+
+    it("ignores empty deltas left behind by an interrupted diff") {
+      val dir = Files.createTempDirectory("native-repo").toFile
+      val broken = write(new File(dir, "beangle-ems-portal-4.20.13_4.20.14-SNAPSHOT-20260913.102219-1-linux-amd64.tar.gz.diff"), "")
+      NativeImagePlugin.findLatestDelta(dir, "beangle-ems-portal", "4.20.14-SNAPSHOT", "linux-amd64") shouldBe None
+
+      val good = write(new File(dir, "beangle-ems-portal-4.20.13_4.20.14-SNAPSHOT-20260913.101500-1-linux-amd64.tar.gz.diff"), "delta")
+      NativeImagePlugin.findLatestDelta(dir, "beangle-ems-portal", "4.20.14-SNAPSHOT", "linux-amd64") shouldBe Some(good)
+      broken.exists() shouldBe true
+    }
+
+    it("uses maven style names for a released version and returns None when absent") {
+      val dir = Files.createTempDirectory("native-repo").toFile
+      val delta = write(new File(dir, "beangle-ems-portal-4.20.13_4.20.14-linux-amd64.tar.gz.diff"), "delta")
+      NativeImagePlugin.findLatestDelta(dir, "beangle-ems-portal", "4.20.14", "linux-amd64") shouldBe Some(delta)
+      NativeImagePlugin.findLatestDelta(dir, "beangle-ems-portal", "4.20.16", "linux-amd64") shouldBe None
+      NativeImagePlugin.deltaBuildNumber(delta.getName, "_4.20.14", "-linux-amd64.tar.gz.diff") shouldBe ""
+      NativeImagePlugin.deltaBuildNumber(
+        "beangle-ems-portal-4.20.13_4.20.14-SNAPSHOT-20260913.101500-1-linux-amd64.tar.gz.diff",
+        "_4.20.14-SNAPSHOT", "-linux-amd64.tar.gz.diff") shouldBe "-20260913.101500-1"
     }
   }
 }

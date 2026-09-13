@@ -64,8 +64,7 @@ object SnapshotPlugin extends sbt.AutoPlugin {
       val dir = (snapshotBuild / target).value.getAbsolutePath + "/"
       if (version.value.contains("SNAPSHOT") && (a.extension == "war" || a.extension == "jar")) {
         if (file.exists()) {
-          val formater = DateTimeFormatter.ofPattern("yyyyMMdd.HHmmss")
-          val buildNumber = formater.format(LocalDateTime.now(ZoneOffset.UTC)) + "-1"
+          val buildNumber = timestampBuildNumber()
           val build = new File(dir + a.name + "-" + version.value.replace("-SNAPSHOT", "") + "-" + buildNumber + "." + a.extension)
           if (build.exists()) {
             build.delete()
@@ -155,6 +154,11 @@ object SnapshotPlugin extends sbt.AutoPlugin {
       in.close()
     }
     md.digest().map(b => "%02x".format(b & 0xff)).mkString
+  }
+
+  /** 快照构建号：UTC 时间戳加构建序号，如 `20260913.101500-1`。 */
+  private[sbt] def timestampBuildNumber(): String = {
+    DateTimeFormatter.ofPattern("yyyyMMdd.HHmmss").format(LocalDateTime.now(ZoneOffset.UTC)) + "-1"
   }
 
   private[sbt] def upload(url: URL, file: File, user: String, password: String): (Int, Any) = {
