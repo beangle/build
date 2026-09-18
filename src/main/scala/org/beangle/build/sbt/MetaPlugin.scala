@@ -62,7 +62,9 @@ object MetaPlugin extends sbt.AutoPlugin {
 
   override val projectSettings: Seq[Setting[?]] = Seq(
     Compile / metaIndex := Def.uncached {
+      val start = System.currentTimeMillis()
       given FileConverter = fileConverter.value
+      val log = streams.value.log
       val classesDir = (Compile / classDirectory).value
       val outDir = (Compile / resourceManaged).value
       val outputPath = outDir / OutputPath
@@ -76,7 +78,11 @@ object MetaPlugin extends sbt.AutoPlugin {
       val registrarTexts = ClasspathScan.readResources(classpath, RegistrarsPath)
       val xmlTexts = ClasspathScan.readResources(classpath, BeangleXmlName)
       val listFile = (Compile / target).value / "meta" / "beanmeta-registrars.txt"
-      generate(registrarTexts, xmlTexts, listFile, outputPath, classpath, streams.value.log)
+      val generated = generate(registrarTexts, xmlTexts, listFile, outputPath, classpath, log)
+      generated.foreach { file =>
+        log.info(s"Generated beanmeta.idx at ${file.getAbsolutePath} using ${System.currentTimeMillis() - start} ms")
+      }
+      generated
     },
     Compile / compilePostHooks += Def.task {
       (Compile / metaIndex).value
@@ -84,7 +90,9 @@ object MetaPlugin extends sbt.AutoPlugin {
     }.taskValue,
     Test / metaIndex := Def.uncached {
       // 编译时序由 Test / compilePostHooks 保证（compile 完成后执行），这里不能再依赖 compile，否则成环
+      val start = System.currentTimeMillis()
       given FileConverter = fileConverter.value
+      val log = streams.value.log
       val classesDir = (Test / classDirectory).value
       val outDir = (Test / resourceManaged).value
       val outputPath = outDir / OutputPath
@@ -179,7 +187,6 @@ object MetaPlugin extends sbt.AutoPlugin {
       reader.join(5000)
       if (exitCode == 0) {
         if (output.exists() && output.length() > 0) {
-          log.info(s"Generated beanmeta.idx at ${output.getAbsolutePath}")
           Right(Some(output))
         } else {
           log.info(s"No registrars declared; beanmeta.idx generation skipped")

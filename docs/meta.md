@@ -73,7 +73,11 @@ classpath（本模块 + 依赖项目 + 外部依赖）；插件先把跨条目�
 
 ```bash
 sbt "Compile / metaIndex"
-# Generated beanmeta.idx at .../resource_managed/main/META-INF/beangle/beanmeta.idx
+# Generated beanmeta.idx at .../resource_managed/main/META-INF/beangle/beanmeta.idx using 1110 ms
+
+sbt "Test / metaIndex"
+# 有 Test 声明：Generated beanmeta.idx at .../resource_managed/test/META-INF/beangle/beanmeta.idx using 480 ms
+# 没有则跳过且不留文件（残留的旧产物会被删除）
 ```
 
 与 GraalVM native-image 配合时，与 [AotPlugin](aot.md) 一起启用。

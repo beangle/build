@@ -67,7 +67,9 @@ object AotPlugin extends sbt.AutoPlugin {
 
   override val projectSettings: Seq[Setting[?]] = Seq(
     Compile / aotHints := Def.uncached {
+      val start = System.currentTimeMillis()
       given FileConverter = fileConverter.value
+      val log = streams.value.log
       val classesDir = (Compile / classDirectory).value
       val outDir = (Compile / resourceManaged).value / OutputDir
       // post-compile 钩子早于 copyResources，classDirectory 尚未物化本模块资源；
@@ -86,7 +88,11 @@ object AotPlugin extends sbt.AutoPlugin {
       val xmlTexts = ClasspathScan.readResources(classpath, BeangleXmlName)
       val listFile = (Compile / target).value / "aot" / "aot-registrars.txt"
       val classesFile = (Compile / target).value / "aot" / "aot-classes.txt"
-      generate(registrarTexts, xmlTexts, listFile, classesFile, outDir, classpath, streams.value.log)
+      val generated = generate(registrarTexts, xmlTexts, listFile, classesFile, outDir, classpath, log)
+      if (generated.nonEmpty) {
+        log.info(s"Generated GraalVM reachability-metadata in ${outDir.getAbsolutePath} using ${System.currentTimeMillis() - start} ms")
+      }
+      generated
     },
     Compile / compilePostHooks += Def.task {
       (Compile / aotHints).value
@@ -181,9 +187,7 @@ object AotPlugin extends sbt.AutoPlugin {
       val exitCode = proc.waitFor()
       reader.join(5000)
       if (exitCode == 0) {
-        val files = Seq(outDir / ReachabilityMetadataFile, outDir / NativeImagePropertiesFile).filter(_.exists())
-        if (files.nonEmpty) log.info(s"Generated GraalVM reachability-metadata in ${outDir.getAbsolutePath}")
-        Right(files)
+        Right(Seq(outDir / ReachabilityMetadataFile, outDir / NativeImagePropertiesFile).filter(_.exists()))
       } else {
         val output = out.toString
         log.debug(s"AotHintGenerator exited with code $exitCode:\n$output")

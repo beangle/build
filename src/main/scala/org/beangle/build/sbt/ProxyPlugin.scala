@@ -75,6 +75,7 @@ object ProxyPlugin extends sbt.AutoPlugin {
 
   override val projectSettings: Seq[Setting[?]] = Seq(
     Compile / proxyClasses := Def.uncached {
+      val start = System.currentTimeMillis()
       given FileConverter = fileConverter.value
       val log = streams.value.log
       val classesDir = (Compile / classDirectory).value
@@ -94,7 +95,13 @@ object ProxyPlugin extends sbt.AutoPlugin {
         log.debug(s"No beangle-data-hibernate on classpath; Hibernate proxy generation skipped")
         deleteStale(resDir)
         Nil
-      } else generate(xmlTexts, listFile, resDir, classpath, log)
+      } else {
+        val generated = generate(xmlTexts, listFile, resDir, classpath, log)
+        if (generated.nonEmpty) {
+          log.info(s"Generated Hibernate proxies in ${resDir.getAbsolutePath} using ${System.currentTimeMillis() - start} ms")
+        }
+        generated
+      }
     },
     Compile / compilePostHooks += Def.task {
       (Compile / proxyClasses).value
@@ -102,6 +109,7 @@ object ProxyPlugin extends sbt.AutoPlugin {
     }.taskValue,
     Test / proxyClasses := Def.uncached {
       // 编译时序由 Test / compilePostHooks 保证（compile 完成后执行），这里不能再依赖 compile，否则成环
+      val start = System.currentTimeMillis()
       given FileConverter = fileConverter.value
       val log = streams.value.log
       val classesDir = (Test / classDirectory).value
@@ -123,7 +131,13 @@ object ProxyPlugin extends sbt.AutoPlugin {
         log.debug(s"No beangle-data-hibernate on test classpath; Hibernate proxy generation skipped")
         deleteStale(resDir)
         Nil
-      } else generate(xmlTexts, listFile, resDir, classpath, log)
+      } else {
+        val generated = generate(xmlTexts, listFile, resDir, classpath, log)
+        if (generated.nonEmpty) {
+          log.info(s"Generated Hibernate proxies in ${resDir.getAbsolutePath} using ${System.currentTimeMillis() - start} ms")
+        }
+        generated
+      }
     },
     Test / compilePostHooks += Def.task {
       (Test / proxyClasses).value
@@ -181,9 +195,7 @@ object ProxyPlugin extends sbt.AutoPlugin {
       val exitCode = proc.waitFor()
       reader.join(5000)
       if (exitCode == 0) {
-        val files = Seq(resDir / ReachabilityMetadataFile).filter(_.exists())
-        if (files.nonEmpty) log.info(s"Generated Hibernate proxies in ${resDir.getAbsolutePath}")
-        Right(files)
+        Right(Seq(resDir / ReachabilityMetadataFile).filter(_.exists()))
       } else {
         val output = out.toString
         log.debug(s"BeangleProxyGenerator exited with code $exitCode:\n$output")
