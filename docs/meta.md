@@ -41,8 +41,17 @@ classes/资源目录 + 外部依赖 jar），读取各条目携带的 `MetaRegis
 |------|--------|------|
 | `metaIndex` | Compile / Test | 生成合并的 `META-INF/beangle/beanmeta.idx` |
 
-Compile 与 Test 各自独立收集：Test 范围在 Test classes/资源之外，还会并入 main 的
-classes/资源与 Test 外部依赖，供测试运行期使用。通过
+Compile 与 Test 各自独立收集，但**声明的来源范围不同**：Compile 扫描整个运行时
+classpath；Test 只在本模块 test classes/资源里找声明（生成用的 classpath 仍并入 main
+的 classes/资源与 Test 外部依赖，供测试运行期使用）。所以 Test 的产物只含 test 声明的
+类，没有 test 声明时不产出文件。
+
+这一点很关键：Test 的 classpath 本来就包含全部主产物，如果声明也照单全收，产出就是主
+索引的等价副本。而它只在 Test 编译时刷新，主代码演进后不会跟着更新，却会在运行期覆盖
+主索引（`MetaModels` 合并 `classpath*:` 上所有 idx 时，同一类取后者，于是读到的是 test
+目录里那份旧的）。
+
+通过
 [CompileHookPlugin](compile-hook.md) 注册为编译后钩子，产物写入对应
 `resourceManaged`，随产物打包。
 

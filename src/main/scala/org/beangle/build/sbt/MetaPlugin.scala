@@ -37,6 +37,10 @@ import java.io.File
  * 类必须在 classpath 上找到，否则生成失败。写一份合并的 beanmeta.idx 到本模块
  * `resourceManaged`；[[CompileHookPlugin]] 作为编译后钩子驱动，随终端产物打包。
  *
+ * Test 作用域的声明只在本模块 test classes/资源里找（生成用的 classpath 不受影响），
+ * 因此产出只含 test 声明的类，没有 test 声明时不产出文件：Test 的 classpath 本就含全部
+ * 主产物，全量重写一份既无意义，又会在主代码演进而 Test 未重编译时以过期副本覆盖主索引。
+ *
  * 运行时查找：[[org.beangle.commons.bean.meta.MetaModels]] 读取
  * `classpath*:META-INF/beangle/beanmeta.idx`，集中生成后各模块不再单独携带 idx。
  *
@@ -91,10 +95,18 @@ object MetaPlugin extends sbt.AutoPlugin {
       val depResources = (Compile / unmanagedResourceDirectories).all(ScopeFilter(inDependencies(ThisProject))).value
       val external = mainClasses +: (mainResources ++ CpFiles.files((Test / externalDependencyClasspath).value))
       val classpath = CpFiles.generatorEntries(classesDir, ownResources, external, depClasses, depResources)
-      val registrarTexts = ClasspathScan.readResources(classpath, RegistrarsPath)
-      val xmlTexts = ClasspathScan.readResources(classpath, BeangleXmlName)
+      // 声明只在本模块 test classes/资源里找：Test 的 classpath 含全部主产物与依赖 jar，
+      // 若照单全收，产出就是主索引的等价副本；它不随 Compile 演进，一旦 Test 未重编译就会
+      // 在运行期覆盖主索引（MetaModels 合并同名条目时后者胜）。没有 test 声明时不产出文件。
+      val testEntries = CpFiles.generatorEntries(classesDir, ownResources, Nil, Nil, Nil)
+      val registrarTexts = ClasspathScan.readResources(testEntries, RegistrarsPath)
+      val xmlTexts = ClasspathScan.readResources(testEntries, BeangleXmlName)
       val listFile = (Test / target).value / "meta" / "beanmeta-registrars.txt"
-      generate(registrarTexts, xmlTexts, listFile, outputPath, classpath, streams.value.log)
+      val generated = generate(registrarTexts, xmlTexts, listFile, outputPath, classpath, log)
+      generated.foreach { file =>
+        log.info(s"Generated beanmeta.idx at ${file.getAbsolutePath} using ${System.currentTimeMillis() - start} ms")
+      }
+      generated
     },
     Test / compilePostHooks += Def.task {
       (Test / metaIndex).value
