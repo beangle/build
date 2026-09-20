@@ -59,6 +59,26 @@ class GeneratorSupportSpec extends AnyFunSpec with Matchers {
     }
   }
 
+  describe("GenFailure.of") {
+    it("treats missing declared classes as retryable") {
+      GeneratorSupport.GenFailure.of(2, "1 of 2 declared MetaRegistrar classes not found").exitCode shouldBe 2
+    }
+
+    it("treats a declared Scala object that cannot be instantiated as retryable") {
+      val output = """Failed to load declared MetaRegistrar implementations:
+                     |org.beangle.data.hibernate.model.TestMapping1 is not a MetaRegistrar""".stripMargin
+      GeneratorSupport.GenFailure.of(1, output).exitCode shouldBe 2
+    }
+
+    it("keeps other exit-1 failures deterministic") {
+      GeneratorSupport.GenFailure.of(1, "unknown option: --foo").exitCode shouldBe 1
+    }
+
+    it("summarizes with the last non-empty output line") {
+      GeneratorSupport.GenFailure.of(1, "first\n\nlast\n").summary shouldBe "last"
+    }
+  }
+
   describe("extractModuleClasses") {
     it("does not include web initializer classes") {
       val f = xmlFile(

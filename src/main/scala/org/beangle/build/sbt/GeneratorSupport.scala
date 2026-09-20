@@ -41,9 +41,14 @@ private[sbt] object GeneratorSupport {
       // NoSuchTypeException/Cannot resolve type description：ByteBuddy TypePool 在 sbt 2
       // classDirectory 未完全物化时读不到刚编译的类（如 Scala 3 enum 伴生），属同一时序竞态，
       // 短时重试后即可解析；真正的类型缺失会在重试耗尽后以 exit 1 报出。
+      // "is not a MetaRegistrar" 是"声明类已找到"的误判分支：声明类多为 Scala object，其 X$ 会因
+      // 父类/引用类尚未物化而加载失败（NoClassDefFoundError），生成器随即退回去加载静态转发类 X
+      // ——它不依赖父类，能加载成功，于是把"未就绪"报成类型不符。同样按可重试处理：真正的声明错误
+      // 重试后依旧失败，只是多等一轮退避窗口。
       val retryable = exitCode == 2 ||
         output.contains("ClassNotFoundException") || output.contains("NoClassDefFoundError") ||
-        output.contains("NoSuchTypeException") || output.contains("Cannot resolve type description")
+        output.contains("NoSuchTypeException") || output.contains("Cannot resolve type description") ||
+        output.contains("is not a MetaRegistrar")
       GenFailure(if (retryable) 2 else 1, summary)
     }
   }
