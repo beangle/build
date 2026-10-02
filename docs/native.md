@@ -20,8 +20,8 @@
 
 | 键 | 说明 |
 |----|------|
-| `nativeDistUpload` | 从本地仓库取本版本整包并上传：归档 + `.sha1` + `.sha256` |
-| `nativeDeltaUpload` | 从本地仓库取本版本 `.sha1`（供客户端认版）和最新的补丁并上传：`.sha1` + 补丁 + 补丁 `.sha1` |
+| `nativeDistUpload` | 从本地仓库取本版本整包并上传：归档 + `.sha1` + `.sha256`（按此顺序，先构件后校验） |
+| `nativeDeltaUpload` | 从本地仓库取本版本最新的补丁并上传：补丁 + 补丁 `.sha1`（先构件后校验） |
 
 两个上传任务都**不重新构建**，只读本地 native 仓库，几秒内完成；仓库里没有对应文件时只打印
 `skip ... upload: cannot find ...` 告警并正常结束，因此可以放心地在发布脚本里单独调用。
@@ -35,10 +35,10 @@
 | `nativeImageOutput` | `<NativeImage / target>/<name>` | 可执行文件输出路径 |
 | `nativeDistClassifier` | 由 `os.name`/`os.arch` 推出 | 平台标签，如 `linux-amd64` / `darwin-arm64` |
 | `nativeRepoHome` | `~/.m2` | 本地 maven 主目录；正式版装进 `<home>/repository`，快照版（版本号含 `SNAPSHOT`）装进 `<home>/snapshots` |
-| `nativeRepoPath` | `<group 转路径>/<name>/<version>` | 本工程在仓库内的相对路径，用来填地址模板里的 `{path}` |
+| `nativeRepoPath` | `<group 转路径>/<name>/<version>` | 本工程在 `/native` 里的相对路径，上传地址即 `<nativePublishUrl>/<nativeRepoPath>/<文件名>` |
 | `nativeDistDeltaBase` | `None` | 增量基准版本，缺省取本地仓库中小于当前版本的最大正式版本（忽略 `-SNAPSHOT`） |
 | `nativeDistDeltaHeap` | `"4g"` | 跑 bsdiff 的子 JVM 堆大小；与 sbt 自身的 `-Xmx` 无关 |
-| `nativePublishUrl` | `"unknown-url"` | 发布地址模板，支持 `{path}`、`{fileName}`，如 `https://host/sas/repo/native/upload/{path}/{fileName}` |
+| `nativePublishUrl` | `"unknown-url"` | micdn 的 `/native` 基地址，如 `https://sas.openurp.net/native`；上传/下载同路径，不用模板 |
 
 `NativeImage / target` 默认为 `<项目>/target/native-image`。
 
@@ -63,20 +63,20 @@ sbt "portal/nativeDist"
 `build.sbt` 里）：
 
 ```scala
-nativePublishUrl := "https://sas.openurp.net/sas/repo/native/upload/{path}/{fileName}"
+nativePublishUrl := "https://sas.openurp.net/native"
 ```
 
 ```bash
 sbt "portal/nativeDistUpload"           # 不重新构建，秒级完成
 # 上传 <name>-<version>-linux-amd64.tar.gz 及其 .sha1/.sha256
-# 上传地址：<nativePublishUrl>，成功后打印对应下载地址（去掉 /upload 一段）
+# 上传地址 = <nativePublishUrl>/<group 转路径>/<name>/<version>/<文件名>（全路径 URL，无 query string）
 ```
 
 3）生成并上传增量补丁（diff 在子 JVM 里跑，堆看 `nativeDistDeltaHeap`，默认 `4g`）：
 
 ```bash
 sbt "portal/nativeDeltaUpload"            # 取仓库里最新的补丁上传，秒级完成
-# 上传 <name>-<version>-linux-amd64.tar.gz.sha1、<...>.diff、<...>.diff.sha1
+# 上传 <...>.diff 及其 .diff.sha1（先构件、后校验文件）
 ```
 
 补丁取版本目录里 `<name>-<基准版本>_<版本>[-<UTC 构建号>]-<classifier>.tar.gz.diff` 中构建号
@@ -120,7 +120,7 @@ sbt "portal/nativeDeltaUpload"            # 取仓库里最新的补丁上传，
 ```
 
 用哪个根由「构件所在的版本目录是否以 `-SNAPSHOT` 结尾」决定，下载侧同样如此，因此上传路径
-与下载路径都仍是 `<group 转路径>/<name>/<version>/<文件名>`，与服务端 `/repo/native` 的
+与下载路径都仍是 `<group 转路径>/<name>/<version>/<文件名>`，与服务端 `/native` 的
 `{path}` 模板一致，调用方无需区分两个根。
 
 正式包与快照包同名规则一致（`<name>-<version>-<classifier>.tar.gz`），快照补丁在文件名里
@@ -160,18 +160,23 @@ sbt "portal/nativeDeltaUpload"            # 取仓库里最新的补丁上传，
 
 ## 服务端仓库
 
-sashub 的 `/repo/native` 提供 native 仓库的上传与下载（正式版落 `~/.m2/repository`，
-开发版落 `~/.m2/snapshots`，与 `/repo/snapshot` 同一套根目录）：
+上传与下载都由 [micdn](https://github.com/beangle/micdn) 的 `/native` 提供（war/jar 的
+快照走同一个 micdn 实例的 `/maven`，见 [snapshot.md](snapshot.md)）。native 构件是 tar.gz
+而非 war/jar，没有 MANIFEST.MF 可解析坐标，坐标完全由路径决定，因此**本地仓库布局
+（`nativeRepoHome` 的 `repository`/`snapshots` 两个根）只是构建机的暂存**，上传路径仍统一为
+`<group 转路径>/<name>/<version>/<文件名>`；服务端是**单根**（`${micdn.home}/native`），
+正式版与开发版共用，靠版本目录名里的 `-SNAPSHOT` 区分。micdn 侧要**显式声明 `<native/>`**
+（`<native base="…"/>` 可换仓库根）才挂载 `/native`——与 `<maven>` / `<npm>` 一样，元素就是端点开关：
 
-- 上传：`POST /repo/native/upload/{仓库内相对路径}`，鉴权与 `/repo/snapshot` 相同
-  （Basic，token 取 `snapshot.usertoken`）。构件是 tar.gz 而非 war/jar，没有 MANIFEST.MF
-  可解析坐标，坐标由上传路径决定，所以地址模板里的 `{path}` 必须与仓库内的相对路径一致；
-- 下载：`GET|HEAD /repo/native/{仓库内相对路径}`；
-- 文件名里不含时间戳的 `-SNAPSHOT` 请求解析到时间戳最新的同名构件（`HEAD` 用 `latest`
-  响应头返回具体文件名，`GET` 重定向到该文件），客户端因此可以用别名下载（如
-  `<name>-<旧版本>_<版本>-SNAPSHOT-<classifier>.tar.gz.diff`）；`.sha1` 先于构件到达时会
-  暂存在对应仓库根下的 `.pending` 目录（`~/.m2/repository/.pending` 或
-  `~/.m2/snapshots/.pending`），构件到达后自动归位。
+- 上传：`PUT /native/{仓库内相对路径}`（全路径 URL，不用 query string），
+  `Authorization: Bearer <token>`（`~/.sbt/snapshot_credentials` 里的 `token`，与
+  [snapshot.md](snapshot.md) 同一份，对应 micdn 的 `<publish token="…"/>`）。
+  先传构件、再传 `.sha1`；micdn 只做原子落盘，**不**校验构件与校验文件的先后或配对
+  （sashub 时代的 `.pending` 暂存已不再需要）；
+- 下载：`GET|HEAD /native/{仓库内相对路径}`；目录可列出，根为 `/native/`；
+- 文件名里不含时间戳的 `-SNAPSHOT` 请求解析到同目录时间戳最新的同名构件（`HEAD` 用 `latest`
+  响应头返回具体文件名并给出 `Last-Modified`，`GET` 重定向到该文件），客户端因此可以用别名
+  探测/下载（如 `<name>-<旧版本>_<版本>-SNAPSHOT-<classifier>.tar.gz.diff`）。
 
 ## 示例
 
@@ -180,7 +185,7 @@ lazy val portal = (project in file("portal"))
   .enablePlugins(NativeImagePlugin)
   .settings(
     Compile / mainClass := Some("org.beangle.sas.engine.tomcat.Bootstrap"),
-    nativePublishUrl := "https://sas.openurp.net/sas/repo/native/upload/{path}/{fileName}",
+    nativePublishUrl := "https://sas.openurp.net/native",
     nativeImageOptions ++= Seq("-Os", "--no-fallback")
   )
 ```

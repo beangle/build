@@ -268,14 +268,14 @@ class NativeImagePluginSpec extends AnyFunSpec with Matchers {
   }
 
   describe("repository urls") {
-    it("fills the publish url template and derives the download url") {
+    it("joins the /native base with the repository path and file name") {
       val path = "org/beangle/ems/beangle-ems-portal/4.20.14-SNAPSHOT"
       val file = "beangle-ems-portal-4.20.14-SNAPSHOT-linux-amd64.tar.gz"
-      val publishUrl = "https://sas.openurp.net/sas/repo/native/upload/{path}/{fileName}"
-      NativeImagePlugin.fill(publishUrl, path, file) shouldBe
-        s"https://sas.openurp.net/sas/repo/native/upload/$path/$file"
-      NativeImagePlugin.downloadUrl(publishUrl, path, file) shouldBe
-        s"https://sas.openurp.net/sas/repo/native/$path/$file"
+      NativeImagePlugin.nativeUrl("https://sas.openurp.net/native", path, file) shouldBe
+        s"https://sas.openurp.net/native/$path/$file"
+      // 容忍两侧多余的斜杠，避免调用方拼出 `//`
+      NativeImagePlugin.nativeUrl("https://sas.openurp.net/native/", "/" + path, "/" + file) shouldBe
+        s"https://sas.openurp.net/native/$path/$file"
     }
   }
 

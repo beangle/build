@@ -4,7 +4,7 @@ import sbt.*
 import sbt.Keys.*
 import sbt.plugins.JvmPlugin
 import xsbti.FileConverter
-import org.beangle.build.util.{Bsdiff, IOs, Strings}
+import org.beangle.build.util.{Bsdiff, IOs}
 import org.beangle.build.util.BsdiffMain
 
 import java.io.{BufferedInputStream, BufferedOutputStream, File, FileInputStream, FileOutputStream}
@@ -59,11 +59,11 @@ object NativeImagePlugin extends sbt.AutoPlugin {
     val nativeDistDeltaHeap: SettingKey[String] = settingKey[String](
       "Heap of the forked bsdiff JVM, e.g. 4g. Unlike the sbt JVM it can be sized for the diff alone.")
     val nativePublishUrl: SettingKey[String] = settingKey[String](
-      "Native repository url for publishing, e.g. https://host/sas/repo/native/upload/{path}/{fileName}.")
+      "micdn /native base url for publishing, e.g. https://host/native; the upload path is the repository relative path.")
     val nativeDistUpload: TaskKey[Unit] = taskKey[Unit](
       "Upload the native distribution and its checksums to the native repository.")
     val nativeDeltaUpload: TaskKey[Unit] = taskKey[Unit](
-      "Upload the native distribution sha1 and delta to the delta repository.")
+      "Upload the newest native delta and its sha1 to the native repository.")
   }
 
   import autoImport.*
@@ -75,7 +75,7 @@ object NativeImagePlugin extends sbt.AutoPlugin {
       val home = Seq("GRAAL_HOME", "GRAALVM_HOME", "JAVA_HOME")
         .flatMap(k => sys.env.get(k))
         .map(Paths.get(_).resolve("bin").resolve(bin))
-        .find(Files.isExecutable(_))
+        .find(Files.isExecutable)
       home.map(_.toString).getOrElse(bin) :: Nil
     },
     nativeImageOptions := Nil,
@@ -174,8 +174,8 @@ object NativeImagePlugin extends sbt.AutoPlugin {
         case None =>
           log.warn(s"skip native delta upload: cannot find any delta in ${dir.getAbsolutePath}, run nativeDist first.")
         case Some(delta) =>
-          val archiveSha1 = new File(dir, distFileName(name.value, version.value, nativeDistClassifier.value) + ".sha1")
-          val files = Seq(archiveSha1, delta, new File(delta.getAbsolutePath + ".sha1")).filter(_.exists)
+          // 先传构件、再传它的 .sha1：micdn 只做原子落盘，不像 sashub 用 `.pending` 等构件与校验文件配对
+          val files = Seq(delta, new File(delta.getAbsolutePath + ".sha1")).filter(_.exists)
           uploadToRepo(
             log,
             SnapshotPlugin.autoImport.snapshotCredentials.value,
@@ -341,41 +341,41 @@ object NativeImagePlugin extends sbt.AutoPlugin {
     if (start >= versionMarker.length && end > start) fileName.substring(start, end) else ""
   }
 
-  /** 用仓库内相对路径和文件名填充地址模板里的 `{path}` / `{fileName}`。 */
-  private[sbt] def fill(url: String, path: String, fileName: String): String =
-    Strings.replace(Strings.replace(url, "{path}", path), "{fileName}", fileName)
+  /** `/native` 上的全路径地址：`<base>/<仓库内相对路径>/<文件名>`。
 
-  /** 从发布地址推下载地址：去掉 `/upload` 一段（只为日志方便，未包含时返回原样）。 */
-  private[sbt] def downloadUrl(publishUrl: String, path: String, fileName: String): String =
-    fill(publishUrl.replace("/upload", ""), path, fileName)
+      micdn 的 native 端点读写同路径（PUT 落盘、GET/HEAD 直接取），不再像 sashub 那样把
+      `path` 塞进 query string，也没有 `/upload` 一段。
+  */
+  private[sbt] def nativeUrl(base: String, path: String, fileName: String): String =
+    base.stripSuffix("/") + "/" + path.stripPrefix("/") + "/" + fileName.stripPrefix("/")
 
-  /** 上传文件到 native 仓库，`publishUrl` 是含 `{path}`/`{fileName}` 占位符的发布地址。 */
+  /** 上传文件到 micdn 的 `/native`，`base` 是端点基地址（如 `https://host/native`）。 */
   private def uploadToRepo(
       log: sbt.util.Logger,
       credentials: File,
-      publishUrl: String,
+      base: String,
       path: String,
       files: Seq[File],
       label: String): Unit = {
-    if (publishUrl == "unknown-url") {
-      log.error("set nativePublishUrl := https://host/sas/repo/native/upload/{path}/{fileName} first.")
+    if (base == "unknown-url") {
+      log.error("set nativePublishUrl := https://host/native first.")
     } else if (files.isEmpty) {
       log.error(s"no $label to upload")
     } else {
-      SnapshotPlugin.readCredentials(credentials) match {
-        case Some((user, password)) =>
+      SnapshotPlugin.bearerAuthorization(credentials) match {
+        case Some(auth) =>
           files.foreach { file =>
-            val url = fill(publishUrl, path, file.getName)
+            val url = nativeUrl(base, path, file.getName)
             log.info(s"Uploading to $url")
-            val rs = SnapshotPlugin.upload(URI.create(url).toURL, file, user, password)
-            if (rs._1 == 200) {
-              log.info(s"Upload ${file.getName} success, download it from ${downloadUrl(publishUrl, path, file.getName)}")
+            val rs = SnapshotPlugin.upload(URI.create(url).toURL, file, auth, "PUT")
+            if (rs._1 == 201 || rs._1 == 200 || rs._1 == 204) {
+              log.info(s"Upload ${file.getName} success")
             } else {
               log.error(s"Upload ${file.getName} failed for status is ${rs._1} and reason is ${rs._2}")
             }
           }
         case None =>
-          log.error(s"Native upload is aborted: cannot find user or password in credentials file $credentials")
+          log.error(s"Native upload is aborted: cannot find token in credentials file $credentials")
       }
     }
   }
