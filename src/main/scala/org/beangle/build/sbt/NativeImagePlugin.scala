@@ -174,7 +174,7 @@ object NativeImagePlugin extends sbt.AutoPlugin {
         case None =>
           log.warn(s"skip native delta upload: cannot find any delta in ${dir.getAbsolutePath}, run nativeDist first.")
         case Some(delta) =>
-          // 先传构件、再传它的 .sha1：micdn 只做原子落盘，不像 sashub 用 `.pending` 等构件与校验文件配对
+          // 先传构件、再传它的 .sha1：micdn 只做原子落盘，不像 bashub 用 `.pending` 等构件与校验文件配对
           val files = Seq(delta, new File(delta.getAbsolutePath + ".sha1")).filter(_.exists)
           uploadToRepo(
             log,
@@ -343,7 +343,7 @@ object NativeImagePlugin extends sbt.AutoPlugin {
 
   /** `/native` 上的全路径地址：`<base>/<仓库内相对路径>/<文件名>`。
 
-      micdn 的 native 端点读写同路径（PUT 落盘、GET/HEAD 直接取），不再像 sashub 那样把
+      micdn 的 native 端点读写同路径（PUT 落盘、GET/HEAD 直接取），不再像 bashub 那样把
       `path` 塞进 query string，也没有 `/upload` 一段。
   */
   private[sbt] def nativeUrl(base: String, path: String, fileName: String): String =

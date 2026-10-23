@@ -170,9 +170,9 @@ sbt "portal/nativeDeltaUpload"            # 取仓库里最新的补丁上传，
 
 - 上传：`PUT /native/{仓库内相对路径}`（全路径 URL，不用 query string），
   `Authorization: Bearer <token>`（`~/.sbt/snapshot_credentials` 里的 `token`，与
-  [snapshot.md](snapshot.md) 同一份，对应 micdn 的 `<publish token="…"/>`）。
+  [snapshot.md](snapshot.md) 同一份，对应 micdn 的 `<auth publish-key="…"/>`）。
   先传构件、再传 `.sha1`；micdn 只做原子落盘，**不**校验构件与校验文件的先后或配对
-  （sashub 时代的 `.pending` 暂存已不再需要）；
+  （bashub 时代的 `.pending` 暂存已不再需要）；
 - 下载：`GET|HEAD /native/{仓库内相对路径}`；目录可列出，根为 `/native/`；
 - 文件名里不含时间戳的 `-SNAPSHOT` 请求解析到同目录时间戳最新的同名构件（`HEAD` 用 `latest`
   响应头返回具体文件名并给出 `Last-Modified`，`GET` 重定向到该文件），客户端因此可以用别名
@@ -184,7 +184,7 @@ sbt "portal/nativeDeltaUpload"            # 取仓库里最新的补丁上传，
 lazy val portal = (project in file("portal"))
   .enablePlugins(NativeImagePlugin)
   .settings(
-    Compile / mainClass := Some("org.beangle.sas.engine.tomcat.Bootstrap"),
+    Compile / mainClass := Some("org.beangle.bas.engine.tomcat.Bootstrap"),
     nativePublishUrl := "https://sas.openurp.net/native",
     nativeImageOptions ++= Seq("-Os", "--no-fallback")
   )

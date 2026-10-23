@@ -31,7 +31,7 @@ object TomcatPlugin extends sbt.AutoPlugin {
     val tomcatStart = inputKey[Unit]("start tomcat server")
 
     lazy val baseSettings: Seq[Setting[?]] = Seq(
-      libraryDependencies ++= Seq(Sas.Engine, Sas.TomcatCore, Sas.TomcatWebSocket, Sas.JulToSlf4j),
+      libraryDependencies ++= Seq(Bas.Engine, Bas.TomcatCore, Bas.TomcatWebSocket, Bas.JulToSlf4j),
       tomcatStart := Def.inputTaskDyn {
         import complete.DefaultParsers.*
         val args = spaceDelimited("<arg>").parsed
@@ -60,7 +60,7 @@ object TomcatPlugin extends sbt.AutoPlugin {
       cmds += "java"
       cmds += "-cp"
       cmds += classpath
-      cmds += "org.beangle.sas.engine.tomcat.Bootstrap"
+      cmds += "org.beangle.bas.engine.tomcat.Bootstrap"
       cmds += "--dev=true"
       cmds ++= args
       val pb = new ProcessBuilder(asJava(cmds))

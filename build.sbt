@@ -1,7 +1,7 @@
 import BuildSettings.*
 import sbt.*
 
-version := "0.1.11-SNAPSHOT"
+version := "0.1.11"
 description := "Beangle Build Tools."
 organization := "org.beangle.build"
 homepage := Some(uri("https://github.com/beangle/build"))
@@ -21,7 +21,7 @@ developers := List(
 )
 
 val apache_commons_compress = "org.apache.commons" % "commons-compress" % "1.28.0"
-val byte_buddy = "net.bytebuddy" % "byte-buddy" % "1.18.14"
+val byte_buddy = "net.bytebuddy" % "byte-buddy" % "1.18.15"
 
 lazy val root = (project in file("."))
   .enablePlugins(SbtPlugin)

@@ -32,9 +32,9 @@ import java.time.format.DateTimeFormatter
 import scala.jdk.CollectionConverters.PropertiesHasAsScala
 
 /** 开发快照版支持：把 SNAPSHOT 的 war/jar 复制成带时间戳的文件名并生成 `.sha1`，
-  再以 HTTP PUT 连同 `.sha1` 上传到 micdn 的 `/maven`（`<publish token="…"/>` 声明的发布端点，
+  再以 HTTP PUT 连同 `.sha1` 上传到 micdn 的 `/maven`（`<auth publish-key="…"/>` 声明的发布端点，
   带 `Authorization: Bearer`）。micdn 按仓库相对路径原样落盘，别名 302 与快照元数据
-  由它自己的读路径生成，因此这里不再需要 sashub 时代的 `{fileName}` 上传地址。
+  由它自己的读路径生成，因此这里不再需要 bashub 时代的 `{fileName}` 上传地址。
 
   凭据只有一种形式：`~/.sbt/snapshot_credentials` 里的 `token`（`Authorization: Bearer`）。
   上传顺序固定为**先构件、后 `.sha1`**：micdn 只做原子落盘，不校验构件与校验文件的先后。
@@ -141,7 +141,7 @@ object SnapshotPlugin extends sbt.AutoPlugin {
   private[sbt] def snapshotUrl(base: String, path: String): String =
     base.stripSuffix("/") + "/" + path
 
-  /** 凭据文件里的唯一凭据 `token`，对应 micdn 的 `<publish token="…"/>`。 */
+  /** 凭据文件里的唯一凭据 `token`，对应 micdn 的 `<auth publish-key="…"/>`。 */
   private[sbt] def token(file: File): Option[String] = {
     if (null == file || !file.exists()) None
     else {

@@ -4,13 +4,13 @@
 
 ## 用途
 
-开发期用嵌入式 Tomcat 直接启动 Web 应用（beangle-sas 引擎），无需安装独立
+开发期用嵌入式 Tomcat 直接启动 Web 应用（beangle-bas 引擎），无需安装独立
 Tomcat 或部署 war。
 
 ## 行为
 
 - 自动添加 test 依赖：
-  - `org.beangle.sas:beangle-sas-engine`
+  - `org.beangle.bas:beangle-bas-engine`
   - `org.apache.tomcat.embed:tomcat-embed-core`（11.x）
   - `org.apache.tomcat.embed:tomcat-embed-websocket`
   - `org.slf4j:jul-to-slf4j`（统一日志到 slf4j）
@@ -19,7 +19,7 @@ Tomcat 或部署 war。
 
 | 任务 | 说明 |
 |------|------|
-| `tomcatStart [args...]` | 用 `Test / fullClasspath` fork 启动 `org.beangle.sas.engine.tomcat.Bootstrap --dev=true`，其余参数原样透传（如端口） |
+| `tomcatStart [args...]` | 用 `Test / fullClasspath` fork 启动 `org.beangle.bas.engine.tomcat.Bootstrap --dev=true`，其余参数原样透传（如端口） |
 
 ## 示例
 

@@ -6,7 +6,7 @@
 
 把 SNAPSHOT 版本的 war/jar 打包为带时间戳的文件名，并以 HTTP PUT 上传到
 [micdn](https://github.com/beangle/micdn) 的 `/maven` 发布端点（需在该实例的
-`micdn.xml` 里声明 `<publish token="…"/>`），便于开发期部署联调。
+`micdn.xml` 里声明 `<auth publish-key="…"/>`），便于开发期部署联调。
 
 micdn 只按仓库相对路径原样落盘：`-SNAPSHOT` 别名 302 到最新时间戳文件、artifact 级
 `maven-metadata.xml` 合并本地快照版本，都由它自己的读路径生成，因此这里不需要额外上传

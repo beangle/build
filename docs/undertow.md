@@ -10,12 +10,12 @@
 
 自动添加 test 依赖：
 
-- `org.beangle.sas:beangle-sas-engine`
+- `org.beangle.bas:beangle-bas-engine`
 - `io.undertow.ee:undertow-servlet`
 - `org.slf4j:jul-to-slf4j`
 
 本插件不定义任何任务，只负责把容器与日志依赖引入 classpath，应用自行通过
-beangle-sas 引擎 API 启动 Undertow。
+beangle-bas 引擎 API 启动 Undertow。
 
 ## 示例
 
